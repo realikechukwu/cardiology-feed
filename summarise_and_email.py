@@ -331,7 +331,7 @@ def build_email_html(
 def send_gmail_html(
     smtp_user: str,
     smtp_app_password: str,
-    to_addr: str,
+    to_addrs: list[str],
     from_addr: str,
     subject: str,
     html_body: str,
@@ -339,7 +339,7 @@ def send_gmail_html(
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = from_addr
-    msg["To"] = to_addr
+    msg["To"] = ", ".join(to_addrs)
 
     msg.attach(MIMEText("Your email client does not support HTML.", "plain", "utf-8"))
     msg.attach(MIMEText(html_body, "html", "utf-8"))
@@ -352,8 +352,7 @@ def send_gmail_html(
         server.starttls(context=context)
         server.ehlo()
         server.login(smtp_user, smtp_app_password)
-        server.sendmail(from_addr, [to_addr], msg.as_string())
-
+        server.sendmail(from_addr, to_addrs, msg.as_string())
 
 # ----------------------------
 # Main
@@ -438,21 +437,23 @@ def main() -> int:
     # Send email (Gmail SMTP)
     smtp_user = os.getenv("GMAIL_SMTP_USER", "")
     smtp_app_password = os.getenv("GMAIL_SMTP_APP_PASSWORD", "")
-    to_addr = os.getenv("EMAIL_TO", "")
+    raw_to = os.getenv("EMAIL_TO", "")
+    to_addrs = [e.strip() for e in raw_to.split(",") if e.strip()]
     from_addr = os.getenv("EMAIL_FROM", smtp_user)
 
-    if not (smtp_user and smtp_app_password and to_addr and from_addr):
+    if not (smtp_user and smtp_app_password and from_addr and to_addrs):
         print("❌ Missing Gmail/email env vars. Need GMAIL_SMTP_USER, GMAIL_SMTP_APP_PASSWORD, EMAIL_TO, EMAIL_FROM.", file=sys.stderr)
         return 1
 
     send_gmail_html(
         smtp_user=smtp_user,
         smtp_app_password=smtp_app_password,
-        to_addr=to_addr,
+        to_addrs=to_addrs,
         from_addr=from_addr,
         subject=subject,
         html_body=html_body,
     )
+
 
     # ONLY after successful send: update sent pmids
     for a in unsent:
@@ -460,7 +461,10 @@ def main() -> int:
             sent_pmids.add(a.pmid)
     save_sent_pmids(sent_state_path, sent_pmids)
 
-    print(f"✅ Email sent to {to_addr}. Marked {len(unsent)} PMIDs as sent in {sent_state_path}.")
+    print(
+    f"✅ Email sent to {', '.join(to_addrs)}. "
+    f"Marked {len(unsent)} PMIDs as sent in {sent_state_path}."
+    )
     return 0
 
 
