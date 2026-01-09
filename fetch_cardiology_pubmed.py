@@ -1,16 +1,7 @@
 #!/usr/bin/env python3
 """
-Fetch the most recent papers from a list of cardiology journals via PubMed E-utilities,
-then save a JSON file containing PMID, title, journal, pub date, and abstract (when available).
-
-Usage:
-  python fetch_cardiology_pubmed.py --days 7 --max 200 --out output/cardiology_recent.json
-
-Notes:
-- Reads NCBI_EMAIL and NCBI_API_KEY from .env file
-- PubMed query uses journal field [jour] + date of publication [dp].
-- Abstracts may be missing for some records.
-- This script is polite to NCBI by batching efetch requests.
+Enhanced cardiology article fetcher with filtering and classification.
+Focuses on original research and substantive content for weekly digests.
 """
 
 from __future__ import annotations
@@ -27,18 +18,13 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
-# Load environment variables from .env file
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     print("⚠️  python-dotenv not installed. Install with: pip install python-dotenv", file=sys.stderr)
-    print("    Or set environment variables manually.", file=sys.stderr)
 
-
-# -------------------------
-# Configure your top journals
-# -------------------------
+# Configure journals
 TOP_10_JOURNALS = [
     "Circulation",
     "Journal of the American College of Cardiology",
@@ -52,8 +38,31 @@ TOP_10_JOURNALS = [
     "JACC: Cardiovascular Imaging",
 ]
 
+# Publication types to prioritize (original research and reviews)
+PRIORITY_PUB_TYPES = {
+    "Clinical Trial",
+    "Randomized Controlled Trial",
+    "Multicenter Study",
+    "Meta-Analysis",
+    "Systematic Review",
+    "Observational Study",
+    "Comparative Study",
+    "Review",
+}
+
+# Publication types to exclude (non-substantive content)
+EXCLUDE_PUB_TYPES = {
+    "Editorial",
+    "Comment",
+    "Letter",
+    "News",
+    "Published Erratum",
+    "Retraction of Publication",
+    "Retracted Publication",
+}
+
 EUTILS_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
-TOOL_NAME = "local-pubmed-cardiology-fetch"
+TOOL_NAME = "cardiology-research-digest"
 
 
 def http_get(url: str, timeout: int = 30, headers: Optional[Dict[str, str]] = None) -> bytes:
@@ -66,8 +75,7 @@ def http_get(url: str, timeout: int = 30, headers: Optional[Dict[str, str]] = No
 
 
 def build_journal_query(journals: List[str]) -> str:
-    # Quote journal names; query uses [jour] field.
-    parts = [f"\"{j}\"[jour]" for j in journals]
+    parts = [f'"{j}"[jour]' for j in journals]
     return "(" + " OR ".join(parts) + ")"
 
 
@@ -79,13 +87,12 @@ def esearch_pmids(
     email: str,
     retstart: int = 0,
 ) -> Tuple[List[str], int]:
-    # Use mindate/maxdate with datetype=pdat for robustness
     end = datetime.now(timezone.utc).date()
     start = (datetime.now(timezone.utc) - timedelta(days=days)).date()
 
     params = {
         "db": "pubmed",
-        "term": f"{query} AND (\"{start}\"[dp] : \"{end}\"[dp])",
+        "term": f'{query} AND ("{start}"[dp] : "{end}"[dp])',
         "retmode": "xml",
         "retmax": str(max_results),
         "retstart": str(retstart),
@@ -118,17 +125,15 @@ def _text(elem: Optional[ET.Element]) -> str:
 
 
 def parse_pubdate(article: ET.Element) -> str:
-    # Try ArticleDate (electronic) then PubDate.
     y = article.findtext(".//ArticleDate/Year")
     m = article.findtext(".//ArticleDate/Month")
     d = article.findtext(".//ArticleDate/Day")
     if y and m and d:
         return f"{y}-{m.zfill(2)}-{d.zfill(2)}"
-    # Fallback: Journal PubDate
+    
     y = article.findtext(".//JournalIssue/PubDate/Year")
     m = article.findtext(".//JournalIssue/PubDate/Month")
     d = article.findtext(".//JournalIssue/PubDate/Day")
-    # Month might be "Jan" etc.
     if y and m and d:
         mm = month_to_number(m)
         return f"{y}-{mm.zfill(2)}-{d.zfill(2)}"
@@ -153,7 +158,6 @@ def month_to_number(m: str) -> str:
 
 
 def parse_abstract(article: ET.Element) -> str:
-    # AbstractText can have multiple sections; concatenate with headings when present.
     abs_elems = article.findall(".//Abstract/AbstractText")
     if not abs_elems:
         return ""
@@ -170,6 +174,26 @@ def parse_abstract(article: ET.Element) -> str:
     return "\n".join(chunks).strip()
 
 
+def classify_article(pub_types: List[str], has_abstract: bool) -> str:
+    """Classify article based on publication type and content availability."""
+    pub_types_set = set(pub_types)
+    
+    # Check for excluded types first
+    if pub_types_set & EXCLUDE_PUB_TYPES:
+        return "excluded"
+    
+    # Check for priority research types
+    if pub_types_set & PRIORITY_PUB_TYPES:
+        return "priority" if has_abstract else "priority_no_abstract"
+    
+    # Has abstract but generic type
+    if has_abstract:
+        return "standard"
+    
+    # No abstract, generic type
+    return "low_priority"
+
+
 def parse_article(article: ET.Element) -> Dict[str, Any]:
     pmid = article.findtext(".//PMID") or ""
     title = _text(article.find(".//ArticleTitle"))
@@ -184,7 +208,26 @@ def parse_article(article: ET.Element) -> Dict[str, Any]:
             break
 
     url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else ""
+    
+    # Extract publication types
+    pub_types = []
+    for pt_elem in article.findall(".//PublicationTypeList/PublicationType"):
+        if pt_elem.text:
+            pub_types.append(pt_elem.text.strip())
 
+    # Classify the article
+    category = classify_article(pub_types, bool(abstract))
+    
+    # Extract authors (first 3)
+    authors = []
+    for author_elem in article.findall(".//AuthorList/Author")[:3]:
+        last = author_elem.findtext("LastName") or ""
+        first = author_elem.findtext("ForeName") or ""
+        if last and first:
+            authors.append(f"{last} {first[0]}")
+        elif last:
+            authors.append(last)
+    
     return {
         "pmid": pmid,
         "doi": doi,
@@ -192,6 +235,9 @@ def parse_article(article: ET.Element) -> Dict[str, Any]:
         "journal": journal,
         "pub_date": pub_date,
         "abstract": abstract,
+        "publication_types": pub_types,
+        "category": category,
+        "authors": authors,
         "url": url,
     }
 
@@ -223,20 +269,52 @@ def efetch_details(
         for article in root.findall(".//PubmedArticle"):
             results.append(parse_article(article))
 
-        time.sleep(sleep_s)  # be polite to NCBI
+        time.sleep(sleep_s)
     return results
 
 
+def filter_and_categorize(articles: List[Dict[str, Any]], include_no_abstract: bool = False) -> Dict[str, List[Dict[str, Any]]]:
+    """Filter and categorize articles for digest."""
+    categorized = {
+        "priority": [],
+        "standard": [],
+        "needs_review": [],
+        "excluded": []
+    }
+    
+    for article in articles:
+        cat = article["category"]
+        
+        if cat == "excluded":
+            categorized["excluded"].append(article)
+        elif cat == "priority":
+            categorized["priority"].append(article)
+        elif cat == "priority_no_abstract":
+            if include_no_abstract:
+                categorized["needs_review"].append(article)
+            else:
+                categorized["excluded"].append(article)
+        elif cat == "standard":
+            categorized["standard"].append(article)
+        else:  # low_priority
+            if include_no_abstract:
+                categorized["needs_review"].append(article)
+            else:
+                categorized["excluded"].append(article)
+    
+    return categorized
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description="Fetch and filter cardiology research articles")
     ap.add_argument("--days", type=int, default=7, help="Look back this many days (default: 7)")
-    ap.add_argument("--max", type=int, default=200, help="Max number of PMIDs to retrieve (default: 200)")
+    ap.add_argument("--max", type=int, default=300, help="Max PMIDs to retrieve (default: 300)")
     ap.add_argument("--out", type=str, default="output/cardiology_recent.json", help="Output JSON filename")
-    ap.add_argument("--api-key", type=str, default=None, help="NCBI API key (overrides env var)")
-    ap.add_argument("--email", type=str, default=None, help="Contact email for NCBI (overrides env var)")
+    ap.add_argument("--include-no-abstract", action="store_true", help="Include articles without abstracts")
+    ap.add_argument("--api-key", type=str, default=None, help="NCBI API key")
+    ap.add_argument("--email", type=str, default=None, help="Contact email for NCBI")
     args = ap.parse_args()
 
-    # Get email and API key from environment variables or command line
     email = args.email or os.getenv("NCBI_EMAIL")
     api_key = args.api_key or os.getenv("NCBI_API_KEY")
 
@@ -249,15 +327,13 @@ def main() -> int:
     if api_key:
         print(f"✓ API key found (length: {len(api_key)})")
     else:
-        print("⚠️  No API key provided (requests will be slower)")
+        print("⚠️  No API key (requests will be slower)")
 
-    # Create output directory if it doesn't exist
     output_path = Path(args.out)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     query = build_journal_query(TOP_10_JOURNALS)
 
-    # Pull PMIDs (up to max)
     print(f"\n🔍 Searching for articles from last {args.days} days...")
     pmids, count = esearch_pmids(
         query=query,
@@ -268,41 +344,55 @@ def main() -> int:
     )
     
     if not pmids:
-        print("No PMIDs found for your query/time window.")
-        with open(args.out, "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
-                    "days": args.days,
-                    "journals": TOP_10_JOURNALS,
-                    "count": 0,
-                    "articles": [],
-                },
-                f,
-                ensure_ascii=False,
-                indent=2,
-            )
+        print("No PMIDs found.")
         return 0
 
     print(f"✓ Found {len(pmids)} articles (total available: {count})")
 
-    # Fetch details (title/abstract/etc.)
     print(f"📥 Fetching article details...")
     articles = efetch_details(pmids, api_key=api_key, email=email)
 
+    # Filter and categorize
+    categorized = filter_and_categorize(articles, args.include_no_abstract)
+    
+    # Print statistics
+    print(f"\n📊 Article Classification:")
+    print(f"  Priority Research: {len(categorized['priority'])}")
+    print(f"  Standard Articles: {len(categorized['standard'])}")
+    print(f"  Needs Review: {len(categorized['needs_review'])}")
+    print(f"  Excluded (editorials/letters): {len(categorized['excluded'])}")
+
+    # Prepare digest (priority + standard)
+    digest_articles = categorized["priority"] + categorized["standard"]
+    
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "days": args.days,
         "journals": TOP_10_JOURNALS,
-        "pmid_count": len(pmids),
-        "total_available": count,
-        "articles": articles,
+        "total_fetched": len(articles),
+        "digest_count": len(digest_articles),
+        "statistics": {
+            "priority": len(categorized["priority"]),
+            "standard": len(categorized["standard"]),
+            "needs_review": len(categorized["needs_review"]),
+            "excluded": len(categorized["excluded"])
+        },
+        "articles": digest_articles,
+        "excluded_articles": categorized["excluded"] if args.include_no_abstract else []
     }
 
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
-    print(f"✅ Saved {len(articles)} articles to {args.out}")
+    print(f"\n✅ Saved {len(digest_articles)} digestible articles to {args.out}")
+    
+    # Show sample of priority articles
+    if categorized["priority"]:
+        print(f"\n🌟 Sample Priority Research:")
+        for article in categorized["priority"][:3]:
+            print(f"  • {article['title'][:80]}...")
+            print(f"    {article['journal']} | {', '.join(article['publication_types'])}")
+    
     return 0
 
 
