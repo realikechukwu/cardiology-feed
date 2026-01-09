@@ -24,3 +24,7 @@ state/*
 
 # macOS
 .DS_Store
+
+#future plans/
+roadmap.md
+.roadmap.md
