@@ -307,7 +307,7 @@ def build_email_html(
       </div>
 
       <div style="margin-top:18px;">
-        <div style="font-size:16px; font-weight:800; margin:10px 0;">Top studies (AI summaries)</div>
+        <div style="font-size:16px; font-weight:800; margin:10px 0;">Top studies (structured summaries)</div>
         {summary_cards}
       </div>
 
@@ -317,7 +317,8 @@ def build_email_html(
       </div>
 
       <div style="margin-top:18px; color:#888; font-size:12px; line-height:1.4;">
-        Automated digest. Summaries are constrained to the abstract text and may omit details not reported in the abstract.
+        Summaries are automatically generated from article abstracts using a constrained, non-speculative
+        summarisation pipeline. Source abstracts and PubMed links are provided for verification.
       </div>
     </div>
   </body>
@@ -411,7 +412,7 @@ def main() -> int:
             print(f"⚠️ Summary failed for PMID {a.pmid}: {e}", file=sys.stderr)
 
     # Build HTML
-    subject = args.subject or f"Weekly cardiology digest ({run_date}) — {len(unsent)} new"
+    subject = args.subject or f"Weekly Cardiology Digest ({run_date}) — {len(unsent)} new"
     cards_html = "".join(hero_card_html(a, s) for a, s in summaries) or \
                  "<div style='color:#666; font-size:14px;'>No AI summaries generated this run.</div>"
 
