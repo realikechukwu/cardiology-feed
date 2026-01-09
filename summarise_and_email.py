@@ -145,17 +145,28 @@ def select_for_summary(
 # OpenAI summarisation
 # ----------------------------
 SUMMARY_SCHEMA: Dict[str, Any] = {
-    "name": "paper_summary",
+    "name": "editorial_note",
     "schema": {
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "one_liner": {"type": "string"},
-            "design_population": {"type": "string"},
-            "intervention_comparator": {"type": "string"},
-            "key_result": {"type": "string"},
-            "clinical_takeaway": {"type": "string"},
-            "caveat": {"type": "string"},
+            "editorial_headline": {"type": "string"},
+            "clinical_question": {"type": "string"},
+            "what_was_done": {"type": "string"},
+            "key_findings": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 2,
+                "maxItems": 3
+            },
+            "interpretation": {"type": "string"},
+            "limitations": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "maxItems": 2
+            },
+            "take_home_message": {"type": "string"},
             "tags": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -164,17 +175,19 @@ SUMMARY_SCHEMA: Dict[str, Any] = {
             },
         },
         "required": [
-            "one_liner",
-            "design_population",
-            "intervention_comparator",
-            "key_result",
-            "clinical_takeaway",
-            "caveat",
+            "editorial_headline",
+            "clinical_question",
+            "what_was_done",
+            "key_findings",
+            "interpretation",
+            "limitations",
+            "take_home_message",
             "tags",
         ],
     },
     "strict": True,
 }
+
 
 def summarise_one(client: OpenAI, model: str, a: Article) -> Dict[str, Any]:
     """
@@ -182,10 +195,14 @@ def summarise_one(client: OpenAI, model: str, a: Article) -> Dict[str, Any]:
     """
 
     system = (
-        "You are a clinician-editor writing concise, evidence-faithful summaries for a weekly cardiology digest. "
+        "You are writing a JACC-style editorial note for a weekly cardiology digest. "
+        "Be concise, clinically neutral, and evidence-faithful. "
         "Use ONLY the provided title and abstract. "
-        "If a detail is not reported in the abstract, explicitly say 'Not reported in abstract'. "
-        "No hype, no speculation, no invented numbers."
+        "Do not invent numbers or details. "
+        "If a detail is not reported in the abstract, write exactly: 'Not reported in abstract'. "
+        "Avoid hype words (e.g., breakthrough, game-changing, promising). "
+        "Write short declarative sentences. "
+        "Return JSON matching the schema."
     )
 
     user = f"""TITLE: {a.title}
@@ -216,6 +233,7 @@ LINK: {a.url}
 
     return json.loads(content)
 
+
 # ----------------------------
 # HTML rendering
 # ----------------------------
@@ -237,6 +255,22 @@ def hero_card_html(a: Article, s: Dict[str, Any]) -> str:
         </div>
         """
 
+    def bullets(label: str, items: list[str]) -> str:
+        if not items:
+            return line(label, "Not reported in abstract")
+        lis = "".join(
+            f"<li style='margin:4px 0;'>{html_escape(strip_control_chars(str(x)))}</li>"
+            for x in items
+        )
+        return f"""
+        <div style="margin:6px 0;">
+          <div style="font-size:12px; color:#666; font-weight:600; margin-bottom:2px;">{label}</div>
+          <ul style="margin:6px 0 0 18px; padding:0; font-size:14px; line-height:1.4;">
+            {lis}
+          </ul>
+        </div>
+        """
+
     tags = s.get("tags", [])
     tags_html = ""
     if tags:
@@ -255,12 +289,13 @@ def hero_card_html(a: Article, s: Dict[str, Any]) -> str:
         {journal} • {pub_date}{(" • " + authors) if authors else ""}
       </div>
 
-      {line("Why it matters", s.get("one_liner",""))}
-      {line("Design / population", s.get("design_population",""))}
-      {line("Intervention / comparator", s.get("intervention_comparator",""))}
-      {line("Key result", s.get("key_result",""))}
-      {line("Clinical takeaway", s.get("clinical_takeaway",""))}
-      {line("Caveat", s.get("caveat",""))}
+      {line("Headline", s.get("editorial_headline",""))}
+      {line("Clinical question", s.get("clinical_question",""))}
+      {line("What was done", s.get("what_was_done",""))}
+      {bullets("Key findings", s.get("key_findings", []))}
+      {line("Interpretation", s.get("interpretation",""))}
+      {bullets("Limitations / what’s missing", s.get("limitations", []))}
+      {line("Take-home message", s.get("take_home_message",""))}
 
       {tags_html}
     </div>
@@ -355,6 +390,7 @@ def send_gmail_html(
         server.login(smtp_user, smtp_app_password)
         server.sendmail(from_addr, to_addrs, msg.as_string())
 
+
 # ----------------------------
 # Main
 # ----------------------------
@@ -414,7 +450,7 @@ def main() -> int:
     # Build HTML
     subject = args.subject or f"Weekly Cardiology Digest ({run_date}) — {len(unsent)} new"
     cards_html = "".join(hero_card_html(a, s) for a, s in summaries) or \
-                 "<div style='color:#666; font-size:14px;'>No AI summaries generated this run.</div>"
+                 "<div style='color:#666; font-size:14px;'>No editorial notes generated this run.</div>"
 
     headlines_block = headlines_html(headlines_only)
 
@@ -455,7 +491,6 @@ def main() -> int:
         html_body=html_body,
     )
 
-
     # ONLY after successful send: update sent pmids
     for a in unsent:
         if a.pmid:
@@ -463,8 +498,8 @@ def main() -> int:
     save_sent_pmids(sent_state_path, sent_pmids)
 
     print(
-    f"✅ Email sent to {', '.join(to_addrs)}. "
-    f"Marked {len(unsent)} PMIDs as sent in {sent_state_path}."
+        f"✅ Email sent to {', '.join(to_addrs)}. "
+        f"Marked {len(unsent)} PMIDs as sent in {sent_state_path}."
     )
     return 0
 
