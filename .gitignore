@@ -16,7 +16,8 @@ output/
 *.json
 
 # Runtime state
-state/
+state/*
+!state/sent_pmids.json
 
 # VS Code
 .vscode/
