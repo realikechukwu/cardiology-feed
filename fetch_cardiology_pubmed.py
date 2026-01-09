@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 """
-Enhanced cardiology article fetcher with filtering and classification.
-Focuses on original research and substantive content for weekly digests.
+Enhanced cardiology article fetcher with filtering, classification, dedupe state,
+and date-stamped outputs for weekly digests.
+
+- Fetches PubMed articles from configured journals in the last N days
+- Extracts abstracts, publication types, authors
+- Classifies and filters to produce a "digest" set
+- Dedupes across runs using a local state file of seen PMIDs
+- Writes:
+  (1) a date-stamped output JSON (archive)
+  (2) a stable "latest" output JSON at --out (overwrite)
 """
 
 from __future__ import annotations
@@ -115,7 +123,7 @@ def esearch_pmids(
 
 
 def chunked(lst: List[str], n: int) -> List[List[str]]:
-    return [lst[i : i + n] for i in range(0, len(lst), n)]
+    return [lst[i: i + n] for i in range(0, len(lst), n)]
 
 
 def _text(elem: Optional[ET.Element]) -> str:
@@ -130,7 +138,7 @@ def parse_pubdate(article: ET.Element) -> str:
     d = article.findtext(".//ArticleDate/Day")
     if y and m and d:
         return f"{y}-{m.zfill(2)}-{d.zfill(2)}"
-    
+
     y = article.findtext(".//JournalIssue/PubDate/Year")
     m = article.findtext(".//JournalIssue/PubDate/Month")
     d = article.findtext(".//JournalIssue/PubDate/Day")
@@ -177,19 +185,19 @@ def parse_abstract(article: ET.Element) -> str:
 def classify_article(pub_types: List[str], has_abstract: bool) -> str:
     """Classify article based on publication type and content availability."""
     pub_types_set = set(pub_types)
-    
+
     # Check for excluded types first
     if pub_types_set & EXCLUDE_PUB_TYPES:
         return "excluded"
-    
+
     # Check for priority research types
     if pub_types_set & PRIORITY_PUB_TYPES:
         return "priority" if has_abstract else "priority_no_abstract"
-    
+
     # Has abstract but generic type
     if has_abstract:
         return "standard"
-    
+
     # No abstract, generic type
     return "low_priority"
 
@@ -208,7 +216,7 @@ def parse_article(article: ET.Element) -> Dict[str, Any]:
             break
 
     url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else ""
-    
+
     # Extract publication types
     pub_types = []
     for pt_elem in article.findall(".//PublicationTypeList/PublicationType"):
@@ -217,7 +225,7 @@ def parse_article(article: ET.Element) -> Dict[str, Any]:
 
     # Classify the article
     category = classify_article(pub_types, bool(abstract))
-    
+
     # Extract authors (first 3)
     authors = []
     for author_elem in article.findall(".//AuthorList/Author")[:3]:
@@ -227,7 +235,7 @@ def parse_article(article: ET.Element) -> Dict[str, Any]:
             authors.append(f"{last} {first[0]}")
         elif last:
             authors.append(last)
-    
+
     return {
         "pmid": pmid,
         "doi": doi,
@@ -281,10 +289,10 @@ def filter_and_categorize(articles: List[Dict[str, Any]], include_no_abstract: b
         "needs_review": [],
         "excluded": []
     }
-    
+
     for article in articles:
         cat = article["category"]
-        
+
         if cat == "excluded":
             categorized["excluded"].append(article)
         elif cat == "priority":
@@ -301,18 +309,77 @@ def filter_and_categorize(articles: List[Dict[str, Any]], include_no_abstract: b
                 categorized["needs_review"].append(article)
             else:
                 categorized["excluded"].append(article)
-    
+
     return categorized
+
+
+# -------------------------
+# NEW: Dedupe state helpers
+# -------------------------
+def load_seen_pmids(state_path: Path) -> set[str]:
+    if not state_path.exists():
+        return set()
+    try:
+        with open(state_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        pmids = data.get("seen_pmids", [])
+        if not isinstance(pmids, list):
+            return set()
+        return {str(p).strip() for p in pmids if str(p).strip()}
+    except Exception:
+        # If state file is corrupted, fail safe by not deduping (but do not crash).
+        return set()
+
+
+def save_seen_pmids(state_path: Path, seen_pmids: set[str]) -> None:
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "seen_pmids": sorted(seen_pmids),
+    }
+    with open(state_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def dedupe_articles_by_pmid(articles: List[Dict[str, Any]], seen_pmids: set[str]) -> Tuple[List[Dict[str, Any]], int]:
+    """Return only articles whose PMID is not in seen_pmids. Also returns count removed."""
+    new_articles: List[Dict[str, Any]] = []
+    removed = 0
+    for a in articles:
+        pmid = (a.get("pmid") or "").strip()
+        if not pmid:
+            # If no PMID, keep it (rare) - but it won't be tracked in state
+            new_articles.append(a)
+            continue
+        if pmid in seen_pmids:
+            removed += 1
+            continue
+        new_articles.append(a)
+    return new_articles, removed
+
+
+def make_dated_output_path(base_out: Path, run_date: str) -> Path:
+    """If base_out is output/foo.json -> output/foo_YYYY-MM-DD.json"""
+    suffix = base_out.suffix if base_out.suffix else ".json"
+    stem = base_out.stem if base_out.stem else "digest"
+    return base_out.with_name(f"{stem}_{run_date}{suffix}")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Fetch and filter cardiology research articles")
     ap.add_argument("--days", type=int, default=7, help="Look back this many days (default: 7)")
     ap.add_argument("--max", type=int, default=300, help="Max PMIDs to retrieve (default: 300)")
-    ap.add_argument("--out", type=str, default="output/cardiology_recent.json", help="Output JSON filename")
+    ap.add_argument("--out", type=str, default="output/cardiology_recent.json",
+                    help="Stable output JSON filename (latest). A date-stamped file is also written alongside.")
     ap.add_argument("--include-no-abstract", action="store_true", help="Include articles without abstracts")
     ap.add_argument("--api-key", type=str, default=None, help="NCBI API key")
     ap.add_argument("--email", type=str, default=None, help="Contact email for NCBI")
+
+    # NEW args
+    ap.add_argument("--state", type=str, default="state/seen_pmids.json",
+                    help="Path to dedupe state file (default: state/seen_pmids.json)")
+    ap.add_argument("--no-dedupe", action="store_true",
+                    help="Disable dedupe (always include items even if seen before)")
     args = ap.parse_args()
 
     email = args.email or os.getenv("NCBI_EMAIL")
@@ -342,57 +409,96 @@ def main() -> int:
         api_key=api_key,
         email=email,
     )
-    
+
     if not pmids:
         print("No PMIDs found.")
         return 0
 
     print(f"✓ Found {len(pmids)} articles (total available: {count})")
-
-    print(f"📥 Fetching article details...")
+    print("📥 Fetching article details...")
     articles = efetch_details(pmids, api_key=api_key, email=email)
 
     # Filter and categorize
     categorized = filter_and_categorize(articles, args.include_no_abstract)
-    
+
+    # Prepare digest (priority + standard)
+    digest_articles = categorized["priority"] + categorized["standard"]
+
+    # NEW: Dedupe across runs
+    state_path = Path(args.state)
+    seen_pmids = load_seen_pmids(state_path) if not args.no_dedupe else set()
+    deduped_digest, removed_dupes = dedupe_articles_by_pmid(digest_articles, seen_pmids)
+
+    # Update state with new PMIDs actually included
+    if not args.no_dedupe:
+        for a in deduped_digest:
+            pmid = (a.get("pmid") or "").strip()
+            if pmid:
+                seen_pmids.add(pmid)
+        save_seen_pmids(state_path, seen_pmids)
+
     # Print statistics
-    print(f"\n📊 Article Classification:")
+    print(f"\n📊 Article Classification (pre-dedupe):")
     print(f"  Priority Research: {len(categorized['priority'])}")
     print(f"  Standard Articles: {len(categorized['standard'])}")
     print(f"  Needs Review: {len(categorized['needs_review'])}")
     print(f"  Excluded (editorials/letters): {len(categorized['excluded'])}")
 
-    # Prepare digest (priority + standard)
-    digest_articles = categorized["priority"] + categorized["standard"]
-    
+    if args.no_dedupe:
+        print("\n🟡 Dedupe: disabled")
+    else:
+        print(f"\n🧹 Dedupe: removed {removed_dupes} previously-seen articles")
+        print(f"  State file: {state_path} (total seen: {len(seen_pmids)})")
+
+    run_dt = datetime.now(timezone.utc)
+    run_date = run_dt.date().isoformat()
+    run_ts = run_dt.strftime("%Y-%m-%dT%H%M%SZ")
+
+    dated_output_path = make_dated_output_path(output_path, run_ts)
+
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "run_date": run_date,
         "days": args.days,
         "journals": TOP_10_JOURNALS,
         "total_fetched": len(articles),
-        "digest_count": len(digest_articles),
+        "digest_count_pre_dedupe": len(digest_articles),
+        "digest_count": len(deduped_digest),
+        "dedupe": {
+            "enabled": (not args.no_dedupe),
+            "state_path": str(state_path),
+            "previously_seen_removed": removed_dupes,
+        },
         "statistics": {
             "priority": len(categorized["priority"]),
             "standard": len(categorized["standard"]),
             "needs_review": len(categorized["needs_review"]),
-            "excluded": len(categorized["excluded"])
+            "excluded": len(categorized["excluded"]),
         },
-        "articles": digest_articles,
-        "excluded_articles": categorized["excluded"] if args.include_no_abstract else []
+        "articles": deduped_digest,
+        "excluded_articles": categorized["excluded"] if args.include_no_abstract else [],
     }
 
-    with open(args.out, "w", encoding="utf-8") as f:
+    # Write date-stamped archive
+    with open(dated_output_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
-    print(f"\n✅ Saved {len(digest_articles)} digestible articles to {args.out}")
-    
+    # Write stable "latest" output (same content, overwritten each run)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    print(f"\n✅ Saved {len(deduped_digest)} new digestible articles")
+    print(f"   Archive: {dated_output_path}")
+    print(f"   Latest:  {output_path}")
+
     # Show sample of priority articles
     if categorized["priority"]:
         print(f"\n🌟 Sample Priority Research:")
         for article in categorized["priority"][:3]:
             print(f"  • {article['title'][:80]}...")
-            print(f"    {article['journal']} | {', '.join(article['publication_types'])}")
-    
+            pts = ", ".join(article.get("publication_types", []))
+            print(f"    {article['journal']} | {pts}")
+
     return 0
 
 
