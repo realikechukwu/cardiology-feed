@@ -184,6 +184,12 @@ def parse_article(article: ET.Element) -> Dict[str, Any]:
             break
 
     url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else ""
+    
+    # Extract publication types
+    pub_types = []
+    for pt_elem in article.findall(".//PublicationTypeList/PublicationType"):
+        if pt_elem.text:
+            pub_types.append(pt_elem.text.strip())
 
     return {
         "pmid": pmid,
@@ -192,6 +198,7 @@ def parse_article(article: ET.Element) -> Dict[str, Any]:
         "journal": journal,
         "pub_date": pub_date,
         "abstract": abstract,
+        "publication_types": pub_types,
         "url": url,
     }
 
