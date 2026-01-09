@@ -1,0 +1,21 @@
+# Environment variables
+.env
+
+# Virtual environment
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Output files
+output/
+*.json
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
