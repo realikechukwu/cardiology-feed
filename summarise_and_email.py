@@ -235,9 +235,10 @@ LINK: {a.url}
 
 
 # ----------------------------
-# HTML rendering
+# HTML rendering (IMPROVED)
 # ----------------------------
 def hero_card_html(a: Article, s: Dict[str, Any]) -> str:
+    """Enhanced minimalist card design with better spacing and typography"""
     title = html_escape(strip_control_chars(a.title))
     journal = html_escape(a.journal)
     pub_date = html_escape(a.pub_date)
@@ -249,9 +250,9 @@ def hero_card_html(a: Article, s: Dict[str, Any]) -> str:
     def line(label: str, value: str) -> str:
         value = html_escape(strip_control_chars(value))
         return f"""
-        <div style="margin:6px 0;">
-          <div style="font-size:12px; color:#666; font-weight:600; margin-bottom:2px;">{label}</div>
-          <div style="font-size:14px; line-height:1.4;">{value}</div>
+        <div style="margin:16px 0; padding-bottom:12px; border-bottom:1px solid #f0f0f0;">
+          <div style="font-size:11px; color:#999; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">{label}</div>
+          <div style="font-size:14px; line-height:1.6; color:#2c2c2c;">{value}</div>
         </div>
         """
 
@@ -259,13 +260,13 @@ def hero_card_html(a: Article, s: Dict[str, Any]) -> str:
         if not items:
             return line(label, "Not reported in abstract")
         lis = "".join(
-            f"<li style='margin:4px 0;'>{html_escape(strip_control_chars(str(x)))}</li>"
+            f"<li style='margin:8px 0; line-height:1.6; color:#2c2c2c;'>{html_escape(strip_control_chars(str(x)))}</li>"
             for x in items
         )
         return f"""
-        <div style="margin:6px 0;">
-          <div style="font-size:12px; color:#666; font-weight:600; margin-bottom:2px;">{label}</div>
-          <ul style="margin:6px 0 0 18px; padding:0; font-size:14px; line-height:1.4;">
+        <div style="margin:16px 0; padding-bottom:12px; border-bottom:1px solid #f0f0f0;">
+          <div style="font-size:11px; color:#999; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px;">{label}</div>
+          <ul style="margin:0; padding-left:20px; font-size:14px; line-height:1.6; list-style-type:disc;">
             {lis}
           </ul>
         </div>
@@ -277,16 +278,16 @@ def hero_card_html(a: Article, s: Dict[str, Any]) -> str:
         pills = []
         for t in tags[:6]:
             t = html_escape(strip_control_chars(str(t)))
-            pills.append(f'<span style="display:inline-block; padding:3px 8px; margin:2px 6px 0 0; border:1px solid #ddd; border-radius:999px; font-size:12px; color:#333;">{t}</span>')
-        tags_html = f'<div style="margin-top:10px;">{"".join(pills)}</div>'
+            pills.append(f'<span style="display:inline-block; padding:4px 12px; margin:4px 8px 4px 0; background:#f8f8f8; border-radius:16px; font-size:11px; color:#666; font-weight:500;">{t}</span>')
+        tags_html = f'<div style="margin-top:20px; padding-top:16px; border-top:1px solid #f0f0f0;">{"".join(pills)}</div>'
 
     return f"""
-    <div style="border:1px solid #e6e6e6; border-radius:14px; padding:16px; margin:14px 0; background:#fff;">
-      <div style="font-size:16px; font-weight:700; margin-bottom:6px;">
-        <a href="{url}" style="text-decoration:none; color:#111;">{title}</a>
+    <div style="border:1px solid #e8e8e8; border-radius:8px; padding:24px; margin:20px 0; background:#ffffff; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+      <div style="font-size:18px; font-weight:700; line-height:1.4; margin-bottom:8px; color:#1a1a1a;">
+        <a href="{url}" style="text-decoration:none; color:#1a1a1a;">{title}</a>
       </div>
-      <div style="font-size:12px; color:#666; margin-bottom:12px;">
-        {journal} • {pub_date}{(" • " + authors) if authors else ""}
+      <div style="font-size:12px; color:#888; margin-bottom:20px; padding-bottom:16px; border-bottom:2px solid #f5f5f5;">
+        <span style="font-weight:600;">{journal}</span> · {pub_date}{(" · " + authors) if authors else ""}
       </div>
 
       {line("Headline", s.get("editorial_headline",""))}
@@ -294,8 +295,14 @@ def hero_card_html(a: Article, s: Dict[str, Any]) -> str:
       {line("What was done", s.get("what_was_done",""))}
       {bullets("Key findings", s.get("key_findings", []))}
       {line("Interpretation", s.get("interpretation",""))}
-      {bullets("Limitations / what’s missing", s.get("limitations", []))}
-      {line("Take-home message", s.get("take_home_message",""))}
+      {bullets("Limitations / what's missing", s.get("limitations", []))}
+      
+      <div style="margin:16px 0;">
+        <div style="font-size:11px; color:#999; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Take-home message</div>
+        <div style="font-size:15px; line-height:1.6; color:#1a1a1a; font-weight:500; background:#f9f9f9; padding:16px; border-radius:6px; border-left:3px solid #666;">
+          {html_escape(strip_control_chars(s.get("take_home_message","")))}
+        </div>
+      </div>
 
       {tags_html}
     </div>
@@ -303,16 +310,22 @@ def hero_card_html(a: Article, s: Dict[str, Any]) -> str:
 
 
 def headlines_html(items: List[Article]) -> str:
+    """Improved headlines section with better visual hierarchy"""
     if not items:
-        return "<div style='color:#666; font-size:14px;'>None this week.</div>"
+        return "<div style='color:#999; font-size:14px; font-style:italic; padding:12px 0;'>No additional headlines this week.</div>"
 
     lis = []
     for a in items:
         title = html_escape(strip_control_chars(a.title))
         journal = html_escape(a.journal)
         url = html_escape(a.url)
-        lis.append(f"<li style='margin:8px 0; line-height:1.4;'><a href='{url}' style='color:#111; text-decoration:none;'>{title}</a> <span style='color:#666; font-size:12px;'>({journal})</span></li>")
-    return "<ul style='padding-left:18px; margin:8px 0;'>" + "".join(lis) + "</ul>"
+        lis.append(f"""
+            <li style='margin:12px 0; padding:12px 0; border-bottom:1px solid #f5f5f5; line-height:1.5;'>
+                <a href='{url}' style='color:#2c2c2c; text-decoration:none; font-size:14px; font-weight:500; display:block; margin-bottom:4px;'>{title}</a>
+                <span style='color:#888; font-size:12px;'>{journal}</span>
+            </li>
+        """)
+    return "<ul style='list-style:none; padding:0; margin:0;'>" + "".join(lis) + "</ul>"
 
 
 def build_email_html(
@@ -323,37 +336,54 @@ def build_email_html(
     total_new: int,
     archive_hint: str = "",
 ) -> str:
+    """Enhanced email template with modern minimalist design"""
     return f"""\
 <!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title>{html_escape(subject)}</title>
   </head>
-  <body style="margin:0; padding:0; background:#f6f6f6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;">
-    <div style="max-width:760px; margin:0 auto; padding:24px;">
-      <div style="background:#fff; border:1px solid #e6e6e6; border-radius:16px; padding:18px;">
-        <div style="font-size:20px; font-weight:800; margin-bottom:6px;">Weekly Cardiology Digest</div>
-        <div style="color:#666; font-size:13px;">
-          Generated: {html_escape(generated_at)} • New items: {total_new}
+  <body style="margin:0; padding:0; background:#f5f5f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+    <div style="max-width:720px; margin:0 auto; padding:32px 16px;">
+      
+      <!-- Header -->
+      <div style="background:#ffffff; border:1px solid #e8e8e8; border-radius:8px; padding:28px; margin-bottom:24px; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+        <div style="font-size:28px; font-weight:800; margin-bottom:8px; color:#1a1a1a; letter-spacing:-0.5px;">
+          Weekly Cardiology Digest
         </div>
-        {f"<div style='margin-top:8px; color:#666; font-size:12px;'>{html_escape(archive_hint)}</div>" if archive_hint else ""}
+        <div style="color:#666; font-size:13px; line-height:1.5;">
+          <div style="margin-bottom:4px;">📅 {html_escape(generated_at)}</div>
+          <div>📊 {total_new} new articles this week</div>
+        </div>
+        {f"<div style='margin-top:12px; padding-top:12px; border-top:1px solid #f0f0f0; color:#888; font-size:11px;'>{html_escape(archive_hint)}</div>" if archive_hint else ""}
       </div>
 
-      <div style="margin-top:18px;">
-        <div style="font-size:16px; font-weight:800; margin:10px 0;">Top studies (structured summaries)</div>
-        {summary_cards}
+      <!-- Featured Studies Section -->
+      <div style="margin-bottom:24px;">
+        <div style="font-size:20px; font-weight:700; margin-bottom:16px; color:#1a1a1a; padding-left:4px;">
+          ⭐ Featured Studies
+        </div>
+        {summary_cards if summary_cards else "<div style='color:#999; font-size:14px; padding:20px; background:#fff; border:1px solid #e8e8e8; border-radius:8px;'>No featured studies this week.</div>"}
       </div>
 
-      <div style="margin-top:18px; background:#fff; border:1px solid #e6e6e6; border-radius:16px; padding:16px;">
-        <div style="font-size:16px; font-weight:800; margin-bottom:8px;">Other notable papers (headlines)</div>
+      <!-- Headlines Section -->
+      <div style="background:#ffffff; border:1px solid #e8e8e8; border-radius:8px; padding:24px; margin-bottom:24px; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+        <div style="font-size:18px; font-weight:700; margin-bottom:16px; color:#1a1a1a;">
+          📰 Other Notable Papers
+        </div>
         {headlines_block}
       </div>
 
-      <div style="margin-top:18px; color:#888; font-size:12px; line-height:1.4;">
-        Summaries are automatically generated from article abstracts using a constrained, non-speculative
-        summarisation pipeline. Source abstracts and PubMed links are provided for verification.
+      <!-- Footer -->
+      <div style="color:#999; font-size:11px; line-height:1.6; text-align:center; padding:20px 16px;">
+        <div style="margin-bottom:8px;">
+          Summaries are automatically generated from PubMed abstracts using structured AI analysis.
+        </div>
+        <div>
+          Always refer to the original publications for complete details and verification.
+        </div>
       </div>
     </div>
   </body>
