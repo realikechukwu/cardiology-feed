@@ -380,6 +380,8 @@ def main() -> int:
                     help="Path to dedupe state file (default: state/seen_pmids.json)")
     ap.add_argument("--no-dedupe", action="store_true",
                     help="Disable dedupe (always include items even if seen before)")
+    ap.add_argument("--test-mode", action="store_true",
+                    help="Test mode: skip all state file reading/writing (ignores seen_pmids.json entirely)")
     args = ap.parse_args()
 
     email = args.email or os.getenv("NCBI_EMAIL")
@@ -426,11 +428,12 @@ def main() -> int:
 
     # NEW: Dedupe across runs
     state_path = Path(args.state)
-    seen_pmids = load_seen_pmids(state_path) if not args.no_dedupe else set()
+    skip_state = args.test_mode or args.no_dedupe
+    seen_pmids = load_seen_pmids(state_path) if not skip_state else set()
     deduped_digest, removed_dupes = dedupe_articles_by_pmid(digest_articles, seen_pmids)
 
-    # Update state with new PMIDs actually included
-    if not args.no_dedupe:
+    # Update state with new PMIDs actually included (skip in test mode)
+    if not skip_state:
         for a in deduped_digest:
             pmid = (a.get("pmid") or "").strip()
             if pmid:
@@ -444,7 +447,9 @@ def main() -> int:
     print(f"  Needs Review: {len(categorized['needs_review'])}")
     print(f"  Excluded (editorials/letters): {len(categorized['excluded'])}")
 
-    if args.no_dedupe:
+    if args.test_mode:
+        print("\n🧪 Test mode: state file reading/writing disabled")
+    elif args.no_dedupe:
         print("\n🟡 Dedupe: disabled")
     else:
         print(f"\n🧹 Dedupe: removed {removed_dupes} previously-seen articles")

@@ -49,6 +49,8 @@ def main() -> int:
     ap.add_argument("--include-no-abstract", action="store_true", help="Include articles without abstracts in fetch step")
     ap.add_argument("--no-dedupe", action="store_true", help="Disable dedupe in fetch step")
     ap.add_argument("--dry-run-email", action="store_true", help="Do not send email; generate HTML preview only")
+    ap.add_argument("--test-mode", action="store_true",
+                    help="Test mode: skip all state file reading/writing in both fetch and email steps")
     args = ap.parse_args()
 
     repo_root = Path(__file__).resolve().parent
@@ -78,6 +80,8 @@ def main() -> int:
             fetch_cmd += ["--include-no-abstract"]
         if args.no_dedupe:
             fetch_cmd += ["--no-dedupe"]
+        if args.test_mode:
+            fetch_cmd += ["--test-mode"]
 
         run_cmd(fetch_cmd)
 
@@ -85,6 +89,8 @@ def main() -> int:
         email_cmd = [sys.executable, str(email_script)]
         if args.dry_run_email:
             email_cmd += ["--dry-run"]
+        if args.test_mode:
+            email_cmd += ["--test-mode"]
 
         run_cmd(email_cmd)
 
@@ -98,3 +104,19 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+# ------------------------------------------------------------------------------
+# Example usage:
+#
+# # Standard run (fetches articles, sends email, updates state files)
+# python run_weekly.py --days 7 --max 300
+#
+# # Test mode (no state files read/written - can run repeatedly)
+# python run_weekly.py --test-mode
+#
+# # Test mode + dry run (no state files, no email sent, just HTML preview)
+# python run_weekly.py --test-mode --dry-run-email
+#
+# # Full test with custom parameters
+# python run_weekly.py --test-mode --dry-run-email --days 14 --max 100
+# ------------------------------------------------------------------------------

@@ -3,7 +3,8 @@
 Summarise latest cardiology digest JSON with OpenAI and email as HTML via Gmail SMTP.
 
 - Reads the stable latest JSON produced by fetch_cardiology_pubmed.py
-- Selects top items (priority first) for LLM summaries
+- Prioritises RCTs for hero summaries
+- Selects top items for LLM summaries
 - Renders HTML "hero card" email
 - Sends via Gmail SMTP (App Password recommended)
 - Updates state/sent_pmids.json ONLY after successful email send
@@ -31,7 +32,6 @@ try:
 except ImportError:
     pass
 
-# OpenAI SDK (new-style). Install: pip install openai
 from openai import OpenAI
 
 
@@ -71,7 +71,6 @@ def save_sent_pmids(state_path: Path, sent_pmids: set[str]) -> None:
 
 
 def strip_control_chars(s: str) -> str:
-    # Keeps email rendering sane
     return re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", s)
 
 
@@ -117,26 +116,85 @@ def parse_articles(latest_payload: Dict[str, Any]) -> List[Article]:
 
 
 # ----------------------------
-# Selection logic (simple MVP)
+# Study type detection + selection
 # ----------------------------
+PRIORITY_STUDY_TYPES = {
+    "randomized controlled trial",
+    "randomised controlled trial",
+    "clinical trial",
+    "meta-analysis",
+    "systematic review",
+    "multicenter study",
+    "observational study",
+    "cohort study",
+}
+
+RCT_TERMS = {
+    "randomized controlled trial",
+    "randomised controlled trial",
+}
+
+
+def is_rct(a: Article) -> bool:
+    """Check if article is specifically a randomised controlled trial."""
+    pub_types_lower = {pt.lower().strip() for pt in a.publication_types}
+
+    # Check publication types for RCT
+    if pub_types_lower & RCT_TERMS:
+        return True
+
+    # Fallback: check title/abstract for RCT indicators
+    text_lower = (a.title + " " + a.abstract).lower()
+    rct_phrases = ["randomized controlled", "randomised controlled", "randomly assigned", "random assignment"]
+    return any(phrase in text_lower for phrase in rct_phrases)
+
+
+def is_priority_study(a: Article) -> bool:
+    """Check if article is a high-priority study type (RCT, meta-analysis, systematic review, large cohort)."""
+    pub_types_lower = {pt.lower().strip() for pt in a.publication_types}
+
+    # Check publication types
+    if pub_types_lower & PRIORITY_STUDY_TYPES:
+        return True
+
+    # Fallback: check title/abstract for priority study indicators
+    text_lower = (a.title + " " + a.abstract).lower()
+    priority_phrases = [
+        "randomized", "randomised", "meta-analysis", "meta analysis",
+        "systematic review", "cohort study", "multicenter", "multicentre",
+        "registry", "nationwide", "population-based"
+    ]
+    return any(phrase in text_lower for phrase in priority_phrases)
+
+
 def select_for_summary(
     articles: List[Article],
     max_summaries: int,
     min_abstract_chars: int = 200,
 ) -> Tuple[List[Article], List[Article]]:
     """
-    Returns (to_summarise, headlines_only)
-    - prioritises category == "priority", then "standard"
-    - requires an abstract of at least min_abstract_chars for LLM summarisation
-    """
-    priority = [a for a in articles if a.category == "priority"]
-    standard = [a for a in articles if a.category == "standard"]
+    Returns (to_summarise, headlines_only).
 
-    eligible = [a for a in (priority + standard) if len(a.abstract) >= min_abstract_chars]
+    Priority order:
+    1. Priority studies (RCTs, meta-analyses, systematic reviews, large cohorts) with abstracts
+    2. Other priority category articles with abstracts
+    3. Standard articles with abstracts
+    """
+    priority_studies = [a for a in articles if is_priority_study(a)]
+    non_priority_studies = [a for a in articles if not is_priority_study(a)]
+
+    other_priority = [a for a in non_priority_studies if a.category == "priority"]
+    standard = [a for a in non_priority_studies if a.category == "standard"]
+
+    # Order: priority studies first, then other priority, then standard
+    ordered = priority_studies + other_priority + standard
+
+    # Filter for summarisation eligibility (must have abstract)
+    eligible = [a for a in ordered if len(a.abstract) >= min_abstract_chars]
     to_sum = eligible[:max_summaries]
 
-    to_sum_pmids = {a.pmid for a in to_sum if a.pmid}
-    headlines = [a for a in (priority + standard) if a.pmid not in to_sum_pmids]
+    to_sum_pmids = {a.pmid for a in to_sum}
+    headlines = [a for a in ordered if a.pmid not in to_sum_pmids]
 
     return to_sum, headlines
 
@@ -150,68 +208,61 @@ SUMMARY_SCHEMA: Dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "editorial_headline": {"type": "string"},
-            "clinical_question": {"type": "string"},
-            "what_was_done": {"type": "string"},
-            "key_findings": {
-                "type": "array",
-                "items": {"type": "string"},
-                "minItems": 2,
-                "maxItems": 3
-            },
-            "interpretation": {"type": "string"},
-            "limitations": {
-                "type": "array",
-                "items": {"type": "string"},
-                "minItems": 1,
-                "maxItems": 2
-            },
-            "take_home_message": {"type": "string"},
-            "tags": {
-                "type": "array",
-                "items": {"type": "string"},
-                "minItems": 0,
-                "maxItems": 6
-            },
+            "study_type": {"type": "string"},
+            "finding": {"type": "string"},
+            "so_what": {"type": "string"},
         },
-        "required": [
-            "editorial_headline",
-            "clinical_question",
-            "what_was_done",
-            "key_findings",
-            "interpretation",
-            "limitations",
-            "take_home_message",
-            "tags",
-        ],
+        "required": ["study_type", "finding", "so_what"],
     },
     "strict": True,
 }
+
+
+def normalize_study_type(study_type: str) -> str:
+    """Normalize study type to sentence case for consistent formatting."""
+    if not study_type:
+        return study_type
+    # Handle common acronyms that should stay uppercase
+    acronyms = {"rct": "RCT", "rcts": "RCTs"}
+    words = study_type.lower().split()
+    result = []
+    for i, word in enumerate(words):
+        if word in acronyms:
+            result.append(acronyms[word])
+        elif i == 0:
+            result.append(word.capitalize())
+        else:
+            result.append(word)
+    return " ".join(result)
 
 
 def summarise_one(client: OpenAI, model: str, a: Article) -> Dict[str, Any]:
     """
     Uses OpenAI Chat Completions API with strict JSON schema output.
     """
-
     system = (
-        "You are writing a JACC-style editorial note for a weekly cardiology digest. "
-        "Be concise, clinically neutral, and evidence-faithful. "
-        "Use ONLY the provided title and abstract. "
-        "Do not invent numbers or details. "
-        "If a detail is not reported in the abstract, write exactly: 'Not reported in abstract'. "
-        "Avoid hype words (e.g., breakthrough, game-changing, promising). "
-        "Write short declarative sentences. "
-        "Return JSON matching the schema."
+        "You are writing a brief editorial note for a cardiology digest. "
+        "Return JSON with exactly three fields:\n"
+        "- study_type: Classify the design using one of these exact formats: "
+        "'RCT', 'Meta-analysis', 'Systematic review', 'Prospective cohort', "
+        "'Retrospective cohort', 'Case-control', 'Case series', 'Narrative review', "
+        "'Guideline', or 'Other'. Use sentence case (e.g., 'Meta-analysis' not 'META-ANALYSIS').\n"
+        "- finding: The primary result or conclusion. For trials and observational "
+        "studies, include effect size, CI, and p-value if reported. For reviews, "
+        "state the main synthesis or conclusion.\n"
+        "- so_what: One sentence on why a clinician should care. What does this "
+        "change, confirm, or challenge in practice?\n\n"
+        "If a detail is not in the abstract, write 'Not reported'. "
+        "Be precise. No hype words like 'breakthrough' or 'game-changing'. "
+        "Use only information from the provided abstract."
     )
 
     user = f"""TITLE: {a.title}
 JOURNAL: {a.journal}
 PUB DATE: {a.pub_date}
-PUBLICATION TYPES: {", ".join(a.publication_types) if a.publication_types else "Not reported"}
+PUBLICATION TYPES: {", ".join(a.publication_types) if a.publication_types else "Not specified"}
 ABSTRACT:
 {a.abstract}
-LINK: {a.url}
 """
 
     completion = client.chat.completions.create(
@@ -235,97 +286,104 @@ LINK: {a.url}
 
 
 # ----------------------------
-# HTML rendering (IMPROVED)
+# HTML rendering
 # ----------------------------
 def hero_card_html(a: Article, s: Dict[str, Any]) -> str:
-    """Enhanced minimalist card design with better spacing and typography"""
+    """Minimal three-field card with RCT badge only for actual RCTs."""
     title = html_escape(strip_control_chars(a.title))
     journal = html_escape(a.journal)
     pub_date = html_escape(a.pub_date)
     url = html_escape(a.url)
+    authors = html_escape(", ".join(a.authors)) if a.authors else ""
 
-    authors = ", ".join(a.authors) if a.authors else ""
-    authors = html_escape(authors)
-
-    def line(label: str, value: str) -> str:
-        value = html_escape(strip_control_chars(value))
-        return f"""
-        <div style="margin:16px 0; padding-bottom:12px; border-bottom:1px solid #f0f0f0;">
-          <div style="font-size:11px; color:#999; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">{label}</div>
-          <div style="font-size:14px; line-height:1.6; color:#2c2c2c;">{value}</div>
-        </div>
-        """
-
-    def bullets(label: str, items: list[str]) -> str:
-        if not items:
-            return line(label, "Not reported in abstract")
-        lis = "".join(
-            f"<li style='margin:8px 0; line-height:1.6; color:#2c2c2c;'>{html_escape(strip_control_chars(str(x)))}</li>"
-            for x in items
+    # Badge only for actual RCTs (not all priority studies)
+    rct_badge = ""
+    if is_rct(a):
+        rct_badge = (
+            '<span style="display:inline-block; padding:3px 10px; '
+            'background:#e8f5e9; color:#2e7d32; font-size:10px; '
+            'font-weight:600; border-radius:4px; margin-left:10px; '
+            'vertical-align:middle;">RCT</span>'
         )
-        return f"""
-        <div style="margin:16px 0; padding-bottom:12px; border-bottom:1px solid #f0f0f0;">
-          <div style="font-size:11px; color:#999; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px;">{label}</div>
-          <ul style="margin:0; padding-left:20px; font-size:14px; line-height:1.6; list-style-type:disc;">
-            {lis}
-          </ul>
-        </div>
-        """
 
-    tags = s.get("tags", [])
-    tags_html = ""
-    if tags:
-        pills = []
-        for t in tags[:6]:
-            t = html_escape(strip_control_chars(str(t)))
-            pills.append(f'<span style="display:inline-block; padding:4px 12px; margin:4px 8px 4px 0; background:#f8f8f8; border-radius:16px; font-size:11px; color:#666; font-weight:500;">{t}</span>')
-        tags_html = f'<div style="margin-top:20px; padding-top:16px; border-top:1px solid #f0f0f0;">{"".join(pills)}</div>'
+    # Normalize study type to consistent formatting
+    raw_study_type = s.get("study_type", "")
+    study_type = html_escape(strip_control_chars(normalize_study_type(raw_study_type)))
+    finding = html_escape(strip_control_chars(s.get("finding", "")))
+    so_what = html_escape(strip_control_chars(s.get("so_what", "")))
+
+    # Build meta line: authors · journal · date
+    meta_parts = [p for p in [authors, journal, pub_date] if p]
+    meta_line = " · ".join(meta_parts)
 
     return f"""
-    <div style="border:1px solid #e8e8e8; border-radius:8px; padding:24px; margin:20px 0; background:#ffffff; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
-      <div style="font-size:18px; font-weight:700; line-height:1.4; margin-bottom:8px; color:#1a1a1a;">
-        <a href="{url}" style="text-decoration:none; color:#1a1a1a;">{title}</a>
+    <div style="border:1px solid #e0e0e0; border-radius:8px; padding:24px; margin:16px 0; background:#ffffff;">
+      <div style="font-size:17px; font-weight:600; line-height:1.4; margin-bottom:6px;">
+        <a href="{url}" style="color:#1a1a1a; text-decoration:none;">{title}</a>{rct_badge}
       </div>
-      <div style="font-size:12px; color:#888; margin-bottom:20px; padding-bottom:16px; border-bottom:2px solid #f5f5f5;">
-        <span style="font-weight:600;">{journal}</span> · {pub_date}{(" · " + authors) if authors else ""}
-      </div>
-
-      {line("Headline", s.get("editorial_headline",""))}
-      {line("Clinical question", s.get("clinical_question",""))}
-      {line("What was done", s.get("what_was_done",""))}
-      {bullets("Key findings", s.get("key_findings", []))}
-      {line("Interpretation", s.get("interpretation",""))}
-      {bullets("Limitations / what's missing", s.get("limitations", []))}
-      
-      <div style="margin:16px 0;">
-        <div style="font-size:11px; color:#999; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Take-home message</div>
-        <div style="font-size:15px; line-height:1.6; color:#1a1a1a; font-weight:500; background:#f9f9f9; padding:16px; border-radius:6px; border-left:3px solid #666;">
-          {html_escape(strip_control_chars(s.get("take_home_message","")))}
-        </div>
+      <div style="font-size:12px; color:#888; margin-bottom:20px;">
+        {meta_line}
       </div>
 
-      {tags_html}
+      <div style="margin-bottom:16px;">
+        <div style="font-size:11px; color:#888; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:5px;">Study Type</div>
+        <div style="font-size:14px; line-height:1.5; color:#333;">{study_type}</div>
+      </div>
+
+      <div style="margin-bottom:16px;">
+        <div style="font-size:11px; color:#888; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:5px;">Finding</div>
+        <div style="font-size:14px; line-height:1.5; color:#333;">{finding}</div>
+      </div>
+
+      <div style="background:#f9f9f9; padding:14px; border-radius:6px; border-left:3px solid #666;">
+        <div style="font-size:11px; color:#888; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:5px;">So What?</div>
+        <div style="font-size:14px; line-height:1.5; color:#1a1a1a; font-weight:500;">{so_what}</div>
+      </div>
     </div>
     """
 
 
 def headlines_html(items: List[Article]) -> str:
-    """Improved headlines section with better visual hierarchy"""
+    """Headlines section for non-summarised articles."""
     if not items:
-        return "<div style='color:#999; font-size:14px; font-style:italic; padding:12px 0;'>No additional headlines this week.</div>"
+        return "<div style='color:#888; font-size:14px; padding:8px 0;'>No additional headlines this week.</div>"
 
     lis = []
     for a in items:
         title = html_escape(strip_control_chars(a.title))
         journal = html_escape(a.journal)
+        pub_date = html_escape(a.pub_date)
         url = html_escape(a.url)
+        authors = html_escape(", ".join(a.authors)) if a.authors else ""
+
+        rct_badge = ""
+        if is_rct(a):
+            rct_badge = (
+                '<span style="display:inline-block; padding:2px 6px; '
+                'background:#e8f5e9; color:#2e7d32; font-size:9px; '
+                'font-weight:600; border-radius:3px; margin-left:6px;">RCT</span>'
+            )
+
+        # Build meta line: authors · journal · date
+        meta_parts = [p for p in [authors, journal, pub_date] if p]
+        meta_line = " · ".join(meta_parts)
+
         lis.append(f"""
-            <li style='margin:12px 0; padding:12px 0; border-bottom:1px solid #f5f5f5; line-height:1.5;'>
-                <a href='{url}' style='color:#2c2c2c; text-decoration:none; font-size:14px; font-weight:500; display:block; margin-bottom:4px;'>{title}</a>
-                <span style='color:#888; font-size:12px;'>{journal}</span>
+            <li style='margin:10px 0; padding:10px 0; border-bottom:1px solid #f0f0f0; line-height:1.5;'>
+                <a href='{url}' style='color:#2c2c2c; text-decoration:none; font-size:14px;'>{title}</a>{rct_badge}
+                <div style='color:#888; font-size:12px; margin-top:4px;'>{meta_line}</div>
             </li>
         """)
     return "<ul style='list-style:none; padding:0; margin:0;'>" + "".join(lis) + "</ul>"
+
+
+def format_human_date(iso_date: str) -> str:
+    """Convert ISO datetime string to human-readable format."""
+    try:
+        dt = datetime.fromisoformat(iso_date.replace("Z", "+00:00"))
+        return dt.strftime("%B %d, %Y")
+    except Exception:
+        return iso_date
 
 
 def build_email_html(
@@ -333,10 +391,17 @@ def build_email_html(
     generated_at: str,
     summary_cards: str,
     headlines_block: str,
-    total_new: int,
-    archive_hint: str = "",
+    total_articles: int,
+    featured_count: int,
+    rct_count: int,
 ) -> str:
-    """Enhanced email template with modern minimalist design"""
+    """Email template."""
+    human_date = format_human_date(generated_at)
+
+    rct_note = ""
+    if rct_count > 0:
+        rct_note = f" · {rct_count} RCT{'s' if rct_count != 1 else ''}"
+
     return f"""\
 <!doctype html>
 <html>
@@ -346,44 +411,37 @@ def build_email_html(
     <title>{html_escape(subject)}</title>
   </head>
   <body style="margin:0; padding:0; background:#f5f5f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
-    <div style="max-width:720px; margin:0 auto; padding:32px 16px;">
-      
+    <div style="max-width:680px; margin:0 auto; padding:24px 16px;">
+
       <!-- Header -->
-      <div style="background:#ffffff; border:1px solid #e8e8e8; border-radius:8px; padding:28px; margin-bottom:24px; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
-        <div style="font-size:28px; font-weight:800; margin-bottom:8px; color:#1a1a1a; letter-spacing:-0.5px;">
+      <div style="background:#ffffff; border:1px solid #e0e0e0; border-radius:8px; padding:24px; margin-bottom:20px;">
+        <div style="font-size:24px; font-weight:700; margin-bottom:6px; color:#1a1a1a;">
           Weekly Cardiology Digest
         </div>
-        <div style="color:#666; font-size:13px; line-height:1.5;">
-          <div style="margin-bottom:4px;">📅 {html_escape(generated_at)}</div>
-          <div>📊 {total_new} new articles this week</div>
+        <div style="color:#666; font-size:13px;">
+          {html_escape(human_date)} · {total_articles} articles · {featured_count} featured{rct_note}
         </div>
-        {f"<div style='margin-top:12px; padding-top:12px; border-top:1px solid #f0f0f0; color:#888; font-size:11px;'>{html_escape(archive_hint)}</div>" if archive_hint else ""}
       </div>
 
-      <!-- Featured Studies Section -->
-      <div style="margin-bottom:24px;">
-        <div style="font-size:20px; font-weight:700; margin-bottom:16px; color:#1a1a1a; padding-left:4px;">
-          ⭐ Featured Studies
+      <!-- Featured Studies -->
+      <div style="margin-bottom:20px;">
+        <div style="font-size:18px; font-weight:600; margin-bottom:12px; color:#1a1a1a; padding-left:2px;">
+          Featured Studies
         </div>
-        {summary_cards if summary_cards else "<div style='color:#999; font-size:14px; padding:20px; background:#fff; border:1px solid #e8e8e8; border-radius:8px;'>No featured studies this week.</div>"}
+        {summary_cards if summary_cards else "<div style='color:#888; font-size:14px; padding:16px; background:#fff; border:1px solid #e0e0e0; border-radius:8px;'>No featured studies this week.</div>"}
       </div>
 
-      <!-- Headlines Section -->
-      <div style="background:#ffffff; border:1px solid #e8e8e8; border-radius:8px; padding:24px; margin-bottom:24px; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
-        <div style="font-size:18px; font-weight:700; margin-bottom:16px; color:#1a1a1a;">
-          📰 Other Notable Papers
+      <!-- Headlines -->
+      <div style="background:#ffffff; border:1px solid #e0e0e0; border-radius:8px; padding:20px; margin-bottom:20px;">
+        <div style="font-size:16px; font-weight:600; margin-bottom:12px; color:#1a1a1a;">
+          Other Papers
         </div>
         {headlines_block}
       </div>
 
       <!-- Footer -->
-      <div style="color:#999; font-size:11px; line-height:1.6; text-align:center; padding:20px 16px;">
-        <div style="margin-bottom:8px;">
-          Summaries are automatically generated from PubMed abstracts using structured AI analysis.
-        </div>
-        <div>
-          Always refer to the original publications for complete details and verification.
-        </div>
+      <div style="color:#999; font-size:11px; line-height:1.5; text-align:center; padding:16px;">
+        Summaries automatically generated from abstracts. Refer to original publications for full details.
       </div>
     </div>
   </body>
@@ -405,20 +463,23 @@ def send_gmail_html(
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = from_addr
-    msg["To"] = ", ".join(to_addrs)
+    # Primary recipient is the sender, others are BCC'd (not visible in headers)
+    msg["To"] = from_addr
 
     msg.attach(MIMEText("Your email client does not support HTML.", "plain", "utf-8"))
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
+    # All recipients receive the email, but only sender is visible in To:
+    all_recipients = list(set([from_addr] + to_addrs))
+
     context = ssl.create_default_context()
 
-    # Gmail SMTP: STARTTLS on 587
     with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as server:
         server.ehlo()
         server.starttls(context=context)
         server.ehlo()
         server.login(smtp_user, smtp_app_password)
-        server.sendmail(from_addr, to_addrs, msg.as_string())
+        server.sendmail(from_addr, all_recipients, msg.as_string())
 
 
 # ----------------------------
@@ -431,6 +492,8 @@ def main() -> int:
     ap.add_argument("--max-summaries", type=int, default=10)
     ap.add_argument("--dry-run", action="store_true", help="Do not send email; write HTML preview to output/email_preview.html")
     ap.add_argument("--subject", type=str, default=None)
+    ap.add_argument("--test-mode", action="store_true",
+                    help="Test mode: skip sent_pmids.json reading/writing")
     args = ap.parse_args()
 
     latest_path = Path(args.latest_json)
@@ -448,16 +511,23 @@ def main() -> int:
 
     if not articles:
         print("ℹ️ No articles in latest digest JSON. Nothing to summarise.")
-        # You can choose to email a 'no new items' notice; for now, exit cleanly.
         return 0
 
-    # Optional: avoid re-sending if these PMIDs were already emailed
-    sent_pmids = load_sent_pmids(sent_state_path)
-    unsent = [a for a in articles if a.pmid and a.pmid not in sent_pmids]
+    # Filter already-sent articles (skip in test mode)
+    if args.test_mode:
+        sent_pmids = set()
+        unsent = [a for a in articles if a.pmid]
+        print("🧪 Test mode: ignoring sent_pmids.json, processing all articles")
+    else:
+        sent_pmids = load_sent_pmids(sent_state_path)
+        unsent = [a for a in articles if a.pmid and a.pmid not in sent_pmids]
 
     if not unsent:
         print("ℹ️ All items in latest JSON are already marked as sent. Nothing to email.")
         return 0
+
+    # Count RCTs for reporting
+    rct_count = sum(1 for a in unsent if is_rct(a))
 
     to_sum, headlines_only = select_for_summary(unsent, max_summaries=args.max_summaries)
 
@@ -466,32 +536,37 @@ def main() -> int:
         print("❌ OPENAI_API_KEY missing in environment/.env", file=sys.stderr)
         return 1
 
-    model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    print(f"📡 Using model: {model}")
+
     client = OpenAI(api_key=openai_key)
 
     summaries: List[Tuple[Article, Dict[str, Any]]] = []
     for a in to_sum:
         try:
+            print(f"  Summarising: {a.pmid} — {a.title[:60]}...")
             s = summarise_one(client, model, a)
             summaries.append((a, s))
         except Exception as e:
             print(f"⚠️ Summary failed for PMID {a.pmid}: {e}", file=sys.stderr)
 
-    # Build HTML
-    subject = args.subject or f"Weekly Cardiology Digest ({run_date}) — {len(unsent)} new"
-    cards_html = "".join(hero_card_html(a, s) for a, s in summaries) or \
-                 "<div style='color:#666; font-size:14px;'>No editorial notes generated this run.</div>"
+    if not summaries and not headlines_only:
+        print("⚠️ No summaries generated and no headlines. Skipping email.")
+        return 0
 
+    # Build HTML
+    subject = args.subject or f"Cardiology Digest ({run_date}) — {len(unsent)} new"
+    cards_html = "".join(hero_card_html(a, s) for a, s in summaries)
     headlines_block = headlines_html(headlines_only)
 
-    archive_hint = f"Source: {latest_path.name}"
     html_body = build_email_html(
         subject=subject,
         generated_at=generated_at,
         summary_cards=cards_html,
         headlines_block=headlines_block,
-        total_new=len(unsent),
-        archive_hint=archive_hint,
+        total_articles=len(unsent),
+        featured_count=len(summaries),
+        rct_count=rct_count,
     )
 
     if args.dry_run:
@@ -501,7 +576,7 @@ def main() -> int:
         print(f"✅ Dry run: wrote HTML preview to {preview_path}")
         return 0
 
-    # Send email (Gmail SMTP)
+    # Send email
     smtp_user = os.getenv("GMAIL_SMTP_USER", "")
     smtp_app_password = os.getenv("GMAIL_SMTP_APP_PASSWORD", "")
     raw_to = os.getenv("EMAIL_TO", "")
@@ -521,16 +596,16 @@ def main() -> int:
         html_body=html_body,
     )
 
-    # ONLY after successful send: update sent pmids
-    for a in unsent:
-        if a.pmid:
-            sent_pmids.add(a.pmid)
-    save_sent_pmids(sent_state_path, sent_pmids)
+    # Update sent PMIDs only after successful send (skip in test mode)
+    if not args.test_mode:
+        for a in unsent:
+            if a.pmid:
+                sent_pmids.add(a.pmid)
+        save_sent_pmids(sent_state_path, sent_pmids)
+        print(f"✅ Email sent to {', '.join(to_addrs)}. Marked {len(unsent)} PMIDs as sent.")
+    else:
+        print(f"✅ Email sent to {', '.join(to_addrs)}. 🧪 Test mode: state not updated.")
 
-    print(
-        f"✅ Email sent to {', '.join(to_addrs)}. "
-        f"Marked {len(unsent)} PMIDs as sent in {sent_state_path}."
-    )
     return 0
 
 
