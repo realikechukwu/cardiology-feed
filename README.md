@@ -22,10 +22,10 @@ On each run, the pipeline:
    - priority research,
    - standard articles,
    - excluded (editorials, letters, etc.).
-4. Deduplicates articles across runs using a persisted `sent_pmids.json` state file.
+4. Deduplicates articles across runs using a persisted `seen_pmids.json` state file.
 5. Uses the OpenAI API to generate concise, evidence-faithful summaries.
-6. Sends an HTML email digest via Gmail.
-7. Records which PMIDs were sent so they are **never re-emailed**.
+6. Sends an HTML email digest via Gmail (with per-subscriber personalization).
+7. Records which PMIDs were sent so they are **never re-emailed** (`sent_pmids.json`).
 
 
 ## Repository structure
@@ -39,10 +39,12 @@ On each run, the pipeline:
 ├── run_weekly.py
 │
 ├── state/
+│   ├── seen_pmids.json
 │   └── sent_pmids.json
 │
 ├── output/
-│   └── cardiology_recent.json
+│   ├── cardiology_recent.json
+│   └── email_preview.html
 │
 ├── .github/
 │   └── workflows/
@@ -95,6 +97,13 @@ GMAIL_SMTP_USER=yourgmail@gmail.com
 GMAIL_SMTP_APP_PASSWORD=xxxxxxxxxxxxxxxx
 EMAIL_FROM=yourgmail@gmail.com
 EMAIL_TO=recipient1@gmail.com,recipient2@gmail.com
+
+# Optional: Google Sheets subscribers (overrides EMAIL_TO)
+GOOGLE_SHEET_ID=your_sheet_id
+GOOGLE_CREDENTIALS={"type":"service_account",...}
+
+# Optional: delay (seconds) between per-recipient sends
+EMAIL_SEND_DELAY=1.5
 ```
 ## Notes:
 - Gmail requires a Google App Password (not your normal password).
@@ -112,21 +121,23 @@ python run_weekly.py --days 7 --max 300
 - Fetches recent cardiology articles
 - Generates summaries
 - Sends email
-- Updates state/sent_pmids.json
+- Updates state/seen_pmids.json and state/sent_pmids.json
 
 You should receive the digest email if new articles are found.
 
 ## Deduplication logic (important)
 
-The file:
+The files:
 
 ```code
+state/seen_pmids.json
 state/sent_pmids.json
 ```
 
-Stores all PMIDs that have already been emailed.
-- It is committed to the repository
-- It is updated only after a successful email send
+Stores all PMIDs that have already been seen in fetches and emailed.
+- They are committed to the repository
+- seen_pmids.json is updated after successful fetch
+- sent_pmids.json is updated after a successful email send
 - This guarantees:
   - no duplicate emails across weeks
   - reproducible state
@@ -166,6 +177,9 @@ Repo → Settings → Secrets and variables → Actions
 | GMAIL_SMTP_APP_PASSWORD   | Gmail app password                 |
 | EMAIL_FROM                | Sender email                       |
 | EMAIL_TO                  | Comma-separated recipients         |
+| GOOGLE_SHEET_ID           | Google Sheet ID (optional)         |
+| GOOGLE_CREDENTIALS        | Service account JSON (optional)    |
+| EMAIL_SEND_DELAY          | Delay in seconds (optional)        |
 
 
 ## Important:
@@ -199,7 +213,8 @@ github-actions[bot] Update sent PMIDs after weekly digest
 ```
 
 3. state/sent_pmids.json is updated.
-4. Future runs do not resend the same papers.
+4. state/seen_pmids.json is updated.
+5. Future runs do not resend the same papers.
 
 
 ## Customisation

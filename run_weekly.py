@@ -49,6 +49,8 @@ def main() -> int:
     ap.add_argument("--include-no-abstract", action="store_true", help="Include articles without abstracts in fetch step")
     ap.add_argument("--no-dedupe", action="store_true", help="Disable dedupe in fetch step")
     ap.add_argument("--dry-run-email", action="store_true", help="Do not send email; generate HTML preview only")
+    ap.add_argument("--send-delay", type=float, default=1.5,
+                    help="Delay (seconds) between per-recipient sends; passed to summarise step")
     ap.add_argument("--test-mode", action="store_true",
                     help="Test mode: skip all state file reading/writing in both fetch and email steps")
     args = ap.parse_args()
@@ -89,6 +91,7 @@ def main() -> int:
         email_cmd = [sys.executable, str(email_script)]
         if args.dry_run_email:
             email_cmd += ["--dry-run"]
+        email_cmd += ["--send-delay", str(args.send_delay)]
         if args.test_mode:
             email_cmd += ["--test-mode"]
 

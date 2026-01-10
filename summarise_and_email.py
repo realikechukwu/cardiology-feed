@@ -19,18 +19,31 @@ import re
 import sys
 import ssl
 import smtplib
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
+
+import json
+
+# Google Sheets integration (optional)
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    GSPREAD_AVAILABLE = True
+except ImportError:
+    gspread = None  # type: ignore[assignment]
+    Credentials = None  # type: ignore[assignment]
+    GSPREAD_AVAILABLE = False
 
 from openai import OpenAI
 
@@ -68,6 +81,80 @@ def save_sent_pmids(state_path: Path, sent_pmids: set[str]) -> None:
         "sent_pmids": sorted(sent_pmids),
     }
     write_json(state_path, payload)
+
+
+def fetch_subscribers_from_sheet() -> List[Tuple[str, str]]:
+    """
+    Fetch subscriber emails and first names from Google Sheet, excluding unsubscribers.
+
+    Sheet structure:
+    - Sheet "subscribers": col B = firstname, col C = email
+    - Sheet "unsubscribers": col B = firstname, col C = email
+
+    Returns list of (email, firstname) tuples for active subscribers.
+    Requires GOOGLE_SHEET_ID and GOOGLE_CREDENTIALS env vars.
+    """
+    if not GSPREAD_AVAILABLE or gspread is None or Credentials is None:
+        print("⚠️ gspread not installed, skipping Google Sheets fetch")
+        return []
+
+    sheet_id = os.getenv("GOOGLE_SHEET_ID", "")
+    creds_json = os.getenv("GOOGLE_CREDENTIALS", "")
+
+    if not sheet_id or not creds_json:
+        return []
+
+    try:
+        # Parse credentials from env var (JSON string)
+        creds_dict = json.loads(creds_json)
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets.readonly",
+            "https://www.googleapis.com/auth/drive.readonly"
+        ]
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        client = gspread.authorize(creds)
+
+        spreadsheet = client.open_by_key(sheet_id)
+
+        # Get subscribers from "subscribers" sheet (col B = firstname, col C = email)
+        subscribers_dict: Dict[str, str] = {}  # email -> firstname
+        try:
+            sub_sheet = spreadsheet.worksheet("subscribers")
+            # Get all values to pair firstname (col B) with email (col C)
+            all_rows = sub_sheet.get_all_values()[1:]  # Skip header
+            for row in all_rows:
+                if len(row) >= 3:
+                    firstname = str(row[1]).strip() if row[1] else ""
+                    email = str(row[2]).strip().lower() if row[2] else ""
+                    if email and "@" in email:
+                        subscribers_dict[email] = firstname
+        except Exception as e:
+            if gspread and isinstance(e, gspread.exceptions.WorksheetNotFound):
+                print("⚠️ 'subscribers' sheet not found")
+            else:
+                raise
+
+        # Get unsubscribers from "unsubscribers" sheet, col C (skip header)
+        unsubscribers: set = set()
+        try:
+            unsub_sheet = spreadsheet.worksheet("unsubscribers")
+            unsubscribers_raw = unsub_sheet.col_values(3)[1:]  # Column C, skip header
+            unsubscribers = {str(e).strip().lower() for e in unsubscribers_raw if e and "@" in str(e)}
+        except Exception as e:
+            if gspread and isinstance(e, gspread.exceptions.WorksheetNotFound):
+                print("⚠️ 'unsubscribers' sheet not found, proceeding without exclusions")
+            else:
+                raise
+
+        # Active subscribers = subscribers minus unsubscribers
+        active = [(email, firstname) for email, firstname in subscribers_dict.items() if email not in unsubscribers]
+
+        print(f"📋 Subscribers: {len(subscribers_dict)}, Unsubscribers: {len(unsubscribers)}, Active: {len(active)}")
+        return active
+
+    except Exception as e:
+        print(f"⚠️ Failed to fetch from Google Sheet: {e}")
+        return []
 
 
 def strip_control_chars(s: str) -> str:
@@ -265,16 +352,17 @@ ABSTRACT:
 {a.abstract}
 """
 
+    response_format = cast(Any, {
+        "type": "json_schema",
+        "json_schema": SUMMARY_SCHEMA,
+    })
     completion = client.chat.completions.create(
         model=model,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        response_format={
-            "type": "json_schema",
-            "json_schema": SUMMARY_SCHEMA,
-        },
+        response_format=response_format,
         temperature=0.2,
     )
 
@@ -386,6 +474,9 @@ def format_human_date(iso_date: str) -> str:
         return iso_date
 
 
+UNSUBSCRIBE_URL = "https://forms.gle/WgPF48warDt51Pfi8"
+
+
 def build_email_html(
     subject: str,
     generated_at: str,
@@ -394,13 +485,26 @@ def build_email_html(
     total_articles: int,
     featured_count: int,
     rct_count: int,
+    firstname: str = "",
 ) -> str:
-    """Email template."""
+    """Email template with personalized greeting."""
     human_date = format_human_date(generated_at)
 
     rct_note = ""
     if rct_count > 0:
         rct_note = f" · {rct_count} RCT{'s' if rct_count != 1 else ''}"
+
+    # Personalized greeting
+    if firstname:
+        greeting = (
+            f"<h2 style=\"margin:0 0 6px 0; font-size:18px; color:#1a1a1a;\">Hi {html_escape(firstname)},</h2>"
+            "<h3 style=\"margin:0; font-size:14px; color:#555; font-weight:500;\">This is your weekly cardiology digest. Enjoy!</h3>"
+        )
+    else:
+        greeting = (
+            "<h2 style=\"margin:0 0 6px 0; font-size:18px; color:#1a1a1a;\">Hi,</h2>"
+            "<h3 style=\"margin:0; font-size:14px; color:#555; font-weight:500;\">This is your weekly cardiology digest. Enjoy!</h3>"
+        )
 
     return f"""\
 <!doctype html>
@@ -412,6 +516,13 @@ def build_email_html(
   </head>
   <body style="margin:0; padding:0; background:#f5f5f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
     <div style="max-width:680px; margin:0 auto; padding:24px 16px;">
+
+      <!-- Greeting -->
+      <div style="background:#ffffff; border:1px solid #e0e0e0; border-radius:8px; padding:18px 20px; margin-bottom:20px;">
+        <div style="font-size:16px; color:#1a1a1a; line-height:1.5;">
+          {greeting}
+        </div>
+      </div>
 
       <!-- Header -->
       <div style="background:#ffffff; border:1px solid #e0e0e0; border-radius:8px; padding:24px; margin-bottom:20px;">
@@ -440,8 +551,9 @@ def build_email_html(
       </div>
 
       <!-- Footer -->
-      <div style="color:#999; font-size:11px; line-height:1.5; text-align:center; padding:16px;">
-        Summaries automatically generated from abstracts. Refer to original publications for full details.
+      <div style="color:#999; font-size:11px; line-height:1.8; text-align:center; padding:16px;">
+        Summaries automatically generated from abstracts. Refer to original publications for full details.<br/>
+        <a href="{UNSUBSCRIBE_URL}" style="color:#999; text-decoration:underline;">Unsubscribe here</a>
       </div>
     </div>
   </body>
@@ -455,7 +567,7 @@ def build_email_html(
 def send_gmail_html(
     smtp_user: str,
     smtp_app_password: str,
-    to_addrs: list[str],
+    to_addr: str,
     from_addr: str,
     subject: str,
     html_body: str,
@@ -463,14 +575,10 @@ def send_gmail_html(
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = from_addr
-    # Primary recipient is the sender, others are BCC'd (not visible in headers)
-    msg["To"] = from_addr
+    msg["To"] = to_addr
 
     msg.attach(MIMEText("Your email client does not support HTML.", "plain", "utf-8"))
     msg.attach(MIMEText(html_body, "html", "utf-8"))
-
-    # All recipients receive the email, but only sender is visible in To:
-    all_recipients = list(set([from_addr] + to_addrs))
 
     context = ssl.create_default_context()
 
@@ -479,7 +587,7 @@ def send_gmail_html(
         server.starttls(context=context)
         server.ehlo()
         server.login(smtp_user, smtp_app_password)
-        server.sendmail(from_addr, all_recipients, msg.as_string())
+        server.sendmail(from_addr, [to_addr], msg.as_string())
 
 
 # ----------------------------
@@ -492,8 +600,18 @@ def main() -> int:
     ap.add_argument("--max-summaries", type=int, default=10)
     ap.add_argument("--dry-run", action="store_true", help="Do not send email; write HTML preview to output/email_preview.html")
     ap.add_argument("--subject", type=str, default=None)
+    ap.add_argument("--preview-firstname", type=str, default="",
+                    help="Firstname to use in preview rendering (dry-run/no-send only)")
+    ap.add_argument("--no-send", action="store_true",
+                    help="Do not send email or update sent state; render personalization only")
     ap.add_argument("--test-mode", action="store_true",
                     help="Test mode: skip sent_pmids.json reading/writing")
+    try:
+        default_delay = float(os.getenv("EMAIL_SEND_DELAY", "1.5"))
+    except ValueError:
+        default_delay = 0.0
+    ap.add_argument("--send-delay", type=float, default=default_delay,
+                    help="Delay (seconds) between per-recipient sends (default: 0)")
     args = ap.parse_args()
 
     latest_path = Path(args.latest_json)
@@ -567,6 +685,7 @@ def main() -> int:
     cards_html = "".join(hero_card_html(a, s) for a, s in summaries)
     headlines_block = headlines_html(headlines_only)
 
+    preview_firstname = args.preview_firstname if (args.dry_run or args.no_send) else ""
     html_body = build_email_html(
         subject=subject,
         generated_at=generated_at,
@@ -575,6 +694,7 @@ def main() -> int:
         total_articles=len(unsent),
         featured_count=len(summaries),
         rct_count=rct_count,
+        firstname=preview_firstname,
     )
 
     if args.dry_run:
@@ -587,32 +707,62 @@ def main() -> int:
     # Send email
     smtp_user = os.getenv("GMAIL_SMTP_USER", "")
     smtp_app_password = os.getenv("GMAIL_SMTP_APP_PASSWORD", "")
-    raw_to = os.getenv("EMAIL_TO", "")
-    to_addrs = [e.strip() for e in raw_to.split(",") if e.strip()]
     from_addr = os.getenv("EMAIL_FROM", smtp_user)
 
-    if not (smtp_user and smtp_app_password and from_addr and to_addrs):
-        print("❌ Missing Gmail/email env vars. Need GMAIL_SMTP_USER, GMAIL_SMTP_APP_PASSWORD, EMAIL_TO, EMAIL_FROM.", file=sys.stderr)
+    # Try fetching subscribers from Google Sheet first, fallback to EMAIL_TO
+    sheet_subscribers = fetch_subscribers_from_sheet()
+    if sheet_subscribers:
+        recipients = sheet_subscribers
+    else:
+        raw_to = os.getenv("EMAIL_TO", "")
+        fallback_emails = [e.strip() for e in raw_to.split(",") if e.strip()]
+        recipients = [(email, "") for email in fallback_emails]
+        if recipients:
+            print(f"📧 Using EMAIL_TO fallback: {len(recipients)} recipients")
+
+    if not (smtp_user and smtp_app_password and from_addr and recipients):
+        print("❌ Missing Gmail/email env vars or no subscribers. Need GMAIL_SMTP_USER, GMAIL_SMTP_APP_PASSWORD, and either GOOGLE_SHEET_ID+GOOGLE_CREDENTIALS or EMAIL_TO.", file=sys.stderr)
         return 1
 
-    send_gmail_html(
-        smtp_user=smtp_user,
-        smtp_app_password=smtp_app_password,
-        to_addrs=to_addrs,
-        from_addr=from_addr,
-        subject=subject,
-        html_body=html_body,
-    )
+    sent_count = 0
+    delay_s = max(0.0, args.send_delay or 0.0)
+    for email, firstname in recipients:
+        if not email:
+            continue
+        personalized_html = build_email_html(
+            subject=subject,
+            generated_at=generated_at,
+            summary_cards=cards_html,
+            headlines_block=headlines_block,
+            total_articles=len(unsent),
+            featured_count=len(summaries),
+            rct_count=rct_count,
+            firstname=firstname,
+        )
+        if not args.no_send:
+            send_gmail_html(
+                smtp_user=smtp_user,
+                smtp_app_password=smtp_app_password,
+                to_addr=email,
+                from_addr=from_addr,
+                subject=subject,
+                html_body=personalized_html,
+            )
+        sent_count += 1
+        if delay_s > 0 and not args.no_send:
+            time.sleep(delay_s)
 
     # Update sent PMIDs only after successful send (skip in test mode)
-    if not args.test_mode:
+    if not args.test_mode and not args.no_send:
         for a in unsent:
             if a.pmid:
                 sent_pmids.add(a.pmid)
         save_sent_pmids(sent_state_path, sent_pmids)
-        print(f"✅ Email sent to {', '.join(to_addrs)}. Marked {len(unsent)} PMIDs as sent.")
+        print(f"✅ Email sent to {sent_count} recipients. Marked {len(unsent)} PMIDs as sent.")
+    elif args.no_send:
+        print(f"🛑 No-send mode: skipped SMTP for {sent_count} recipients. State not updated.")
     else:
-        print(f"✅ Email sent to {', '.join(to_addrs)}. 🧪 Test mode: state not updated.")
+        print(f"✅ Email sent to {sent_count} recipients. 🧪 Test mode: state not updated.")
 
     return 0
 
