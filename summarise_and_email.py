@@ -912,7 +912,7 @@ def main() -> int:
                 from_addr=from_addr,
                 subject=subject,
                 html_body=personalized_html,
-                from_name=os.getenv("EMAIL_FROM_NAME", "Cardiology Weekly"),
+                from_name=os.getenv("EMAIL_FROM_NAME", "Ike Chukwudi | Cardiology Digest"),
             )
         sent_count += 1
         if delay_s > 0 and not args.no_send:

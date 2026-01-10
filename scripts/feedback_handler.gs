@@ -421,7 +421,7 @@ function sendWelcomeEmail(email, firstname) {
         ${greeting}
       </p>
       <p style="font-size:15px; color:#333; line-height:1.6; margin:0 0 16px;">
-        You're now subscribed to the Weekly Cardiology Digest. Every Sunday, you'll receive a curated summary of the latest cardiology research from top journals.
+        You're receiving this email because you signed up to receive the Cardiology Digest. Every Sunday, you'll get a curated summary of the latest cardiology research from top journals.
       </p>
     </div>
 
@@ -467,6 +467,7 @@ function sendWelcomeEmail(email, firstname) {
 
     <div style="text-align:center; color:#999; font-size:12px; padding:16px;">
       Your first digest will arrive this Sunday.<br>
+      To help your email provider recognize this as legitimate mail, please reply with "thanks" to confirm.<br>
       Questions? Just reply to this email.
     </div>
 
@@ -476,7 +477,7 @@ function sendWelcomeEmail(email, firstname) {
 
   GmailApp.sendEmail(email, subject, 'Welcome to Cardiology Weekly', {
     htmlBody: htmlBody,
-    name: 'Cardiology Weekly'
+    name: 'Ike Chukwudi | Cardiology Digest'
   });
 }
 
