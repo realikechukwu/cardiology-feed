@@ -312,8 +312,8 @@ def hero_card_html(a: Article, s: Dict[str, Any]) -> str:
     finding = html_escape(strip_control_chars(s.get("finding", "")))
     so_what = html_escape(strip_control_chars(s.get("so_what", "")))
 
-    # Build meta line: authors · journal · date
-    meta_parts = [p for p in [authors, journal, pub_date] if p]
+    # Build meta line: journal · date · authors
+    meta_parts = [p for p in [journal, pub_date, authors] if p]
     meta_line = " · ".join(meta_parts)
 
     return f"""
@@ -364,8 +364,8 @@ def headlines_html(items: List[Article]) -> str:
                 'font-weight:600; border-radius:3px; margin-left:6px;">RCT</span>'
             )
 
-        # Build meta line: authors · journal · date
-        meta_parts = [p for p in [authors, journal, pub_date] if p]
+        # Build meta line: journal · date · authors
+        meta_parts = [p for p in [journal, pub_date, authors] if p]
         meta_line = " · ".join(meta_parts)
 
         lis.append(f"""
@@ -555,7 +555,15 @@ def main() -> int:
         return 0
 
     # Build HTML
-    subject = args.subject or f"Cardiology Digest ({run_date}) — {len(unsent)} new"
+    # Format date as "Jan 10, 2026"
+    subject_date = format_human_date(generated_at).replace(" 0", " ").lstrip("0")  # Remove leading zeros
+    try:
+        from datetime import datetime as dt
+        parsed = dt.fromisoformat(generated_at.replace("Z", "+00:00"))
+        subject_date = parsed.strftime("%b %d, %Y").replace(" 0", " ")
+    except Exception:
+        pass
+    subject = args.subject or f"Cardiology Weekly — {subject_date}"
     cards_html = "".join(hero_card_html(a, s) for a, s in summaries)
     headlines_block = headlines_html(headlines_only)
 
