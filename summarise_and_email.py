@@ -161,6 +161,71 @@ def strip_control_chars(s: str) -> str:
     return re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", s)
 
 
+@dataclass
+class SavedArticle:
+    """A saved article from user feedback."""
+    pmid: str
+    title: str
+    timestamp: str
+
+
+def fetch_user_saves(user_email: str) -> List[SavedArticle]:
+    """
+    Fetch articles the user has saved (voted 'yes' on) from the feedback sheet.
+
+    Returns list of SavedArticle for display in 'Your Saves' section.
+    """
+    if not GSPREAD_AVAILABLE or gspread is None or Credentials is None:
+        return []
+
+    sheet_id = os.getenv("GOOGLE_SHEET_ID", "")
+    creds_json = os.getenv("GOOGLE_CREDENTIALS", "")
+
+    if not sheet_id or not creds_json:
+        return []
+
+    try:
+        creds_dict = json.loads(creds_json)
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets.readonly",
+            "https://www.googleapis.com/auth/drive.readonly"
+        ]
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        client = gspread.authorize(creds)
+        spreadsheet = client.open_by_key(sheet_id)
+
+        try:
+            feedback_sheet = spreadsheet.worksheet("feedback")
+        except Exception:
+            # No feedback sheet yet
+            return []
+
+        # Get all feedback data: timestamp, user, pmid, title, vote
+        all_rows = feedback_sheet.get_all_values()[1:]  # Skip header
+
+        saves = []
+        user_email_lower = user_email.lower().strip()
+
+        for row in all_rows:
+            if len(row) >= 5:
+                timestamp = str(row[0]).strip()
+                email = str(row[1]).strip().lower()
+                pmid = str(row[2]).strip()
+                title = str(row[3]).strip()
+                vote = str(row[4]).strip().lower()
+
+                if email == user_email_lower and vote == "yes":
+                    saves.append(SavedArticle(pmid=pmid, title=title, timestamp=timestamp))
+
+        # Return most recent first, limit to 10
+        saves.reverse()
+        return saves[:10]
+
+    except Exception as e:
+        print(f"⚠️ Failed to fetch user saves: {e}")
+        return []
+
+
 def html_escape(s: str) -> str:
     return (
         s.replace("&", "&amp;")
@@ -376,7 +441,7 @@ ABSTRACT:
 # ----------------------------
 # HTML rendering
 # ----------------------------
-def hero_card_html(a: Article, s: Dict[str, Any]) -> str:
+def hero_card_html(a: Article, s: Dict[str, Any], feedback_html: str = "") -> str:
     """Minimal three-field card with RCT badge only for actual RCTs."""
     title = html_escape(strip_control_chars(a.title))
     journal = html_escape(a.journal)
@@ -427,15 +492,17 @@ def hero_card_html(a: Article, s: Dict[str, Any]) -> str:
         <div style="font-size:11px; color:#888; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:5px;">So What?</div>
         <div style="font-size:14px; line-height:1.5; color:#1a1a1a; font-weight:500;">{so_what}</div>
       </div>
+      {feedback_html}
     </div>
     """
 
 
-def headlines_html(items: List[Article]) -> str:
+def headlines_html(items: List[Article], feedback_map: Optional[Dict[str, str]] = None) -> str:
     """Headlines section for non-summarised articles."""
     if not items:
         return "<div style='color:#888; font-size:14px; padding:8px 0;'>No additional headlines this week.</div>"
 
+    feedback_map = feedback_map or {}
     lis = []
     for a in items:
         title = html_escape(strip_control_chars(a.title))
@@ -456,10 +523,13 @@ def headlines_html(items: List[Article]) -> str:
         meta_parts = [p for p in [journal, pub_date, authors] if p]
         meta_line = " · ".join(meta_parts)
 
+        feedback_html = feedback_map.get(a.pmid, "")
+
         lis.append(f"""
             <li style='margin:10px 0; padding:10px 0; border-bottom:1px solid #f0f0f0; line-height:1.5;'>
                 <a href='{url}' style='color:#2c2c2c; text-decoration:none; font-size:14px;'>{title}</a>{rct_badge}
                 <div style='color:#888; font-size:12px; margin-top:4px;'>{meta_line}</div>
+                {feedback_html}
             </li>
         """)
     return "<ul style='list-style:none; padding:0; margin:0;'>" + "".join(lis) + "</ul>"
@@ -474,7 +544,75 @@ def format_human_date(iso_date: str) -> str:
         return iso_date
 
 
+def your_saves_html(saves: List[SavedArticle], view_saves_url: str = "") -> str:
+    """Build 'Your Saves' section showing articles user previously saved."""
+    if not saves:
+        return ""
+
+    lis = []
+    for s in saves:
+        title = html_escape(strip_control_chars(s.title))
+        url = f"https://pubmed.ncbi.nlm.nih.gov/{s.pmid}/"
+
+        lis.append(f"""
+            <li style='margin:8px 0; padding:8px 0; border-bottom:1px solid #f0f0f0; line-height:1.4;'>
+                <a href='{url}' style='color:#2c2c2c; text-decoration:none; font-size:13px;'>{title}</a>
+            </li>
+        """)
+
+    # Make header clickable if view_saves_url is available
+    if view_saves_url:
+        header = f'<a href="{view_saves_url}" style="color:#1a1a1a; text-decoration:none;">Your Saves →</a>'
+    else:
+        header = 'Your Saves'
+
+    return f"""
+      <div style="background:#ffffff; border:1px solid #e0e0e0; border-radius:8px; padding:20px; margin-bottom:20px;">
+        <div style="font-size:16px; font-weight:600; margin-bottom:12px; color:#1a1a1a;">
+          {header}
+        </div>
+        <div style="font-size:12px; color:#888; margin-bottom:12px;">
+          Articles you marked as useful
+        </div>
+        <ul style='list-style:none; padding:0; margin:0;'>
+          {"".join(lis)}
+        </ul>
+      </div>
+    """
+
+
 UNSUBSCRIBE_URL = "https://forms.gle/WgPF48warDt51Pfi8"
+
+
+def build_feedback_links(pmid: str, title: str, user_email: str, webhook_url: str) -> str:
+    """Build 'Was this useful? Yes · No' feedback links for an article."""
+    if not webhook_url:
+        return ""
+
+    from urllib.parse import quote
+
+    encoded_title = quote(title[:100], safe='')  # Limit title length for URL
+    base = f"{webhook_url}?user={quote(user_email)}&pmid={pmid}&title={encoded_title}"
+    yes_url = f"{base}&vote=yes"
+    no_url = f"{base}&vote=no"
+
+    return f'''
+      <div style="margin-top:12px; font-size:12px; color:#888;">
+        Was this useful?
+        <a href="{yes_url}" style="color:#666; text-decoration:underline; margin-left:6px;">Yes</a>
+        <span style="color:#ccc; margin:0 4px;">·</span>
+        <a href="{no_url}" style="color:#666; text-decoration:underline;">No</a>
+      </div>
+    '''
+
+
+def build_view_saves_url(user_email: str, webhook_url: str) -> str:
+    """Build URL for viewing saved articles."""
+    if not webhook_url or not user_email:
+        return ""
+
+    from urllib.parse import quote
+    return f"{webhook_url}?action=view&user={quote(user_email)}"
 
 
 def build_email_html(
@@ -486,8 +624,10 @@ def build_email_html(
     featured_count: int,
     rct_count: int,
     firstname: str = "",
+    your_saves_block: str = "",
+    view_saves_url: str = "",
 ) -> str:
-    """Email template with personalized greeting."""
+    """Email template with personalized greeting and optional saved articles."""
     human_date = format_human_date(generated_at)
 
     rct_note = ""
@@ -524,6 +664,8 @@ def build_email_html(
         </div>
       </div>
 
+      {your_saves_block}
+
       <!-- Header -->
       <div style="background:#ffffff; border:1px solid #e0e0e0; border-radius:8px; padding:24px; margin-bottom:20px;">
         <div style="font-size:24px; font-weight:700; margin-bottom:6px; color:#1a1a1a;">
@@ -553,7 +695,7 @@ def build_email_html(
       <!-- Footer -->
       <div style="color:#999; font-size:11px; line-height:1.8; text-align:center; padding:16px;">
         Summaries automatically generated from abstracts. Refer to original publications for full details.<br/>
-        <a href="{UNSUBSCRIBE_URL}" style="color:#999; text-decoration:underline;">Unsubscribe here</a>
+        {f'<a href="{view_saves_url}" style="color:#999; text-decoration:underline;">View your saved articles</a> · ' if view_saves_url else ''}<a href="{UNSUBSCRIBE_URL}" style="color:#999; text-decoration:underline;">Unsubscribe</a>
       </div>
     </div>
   </body>
@@ -571,10 +713,11 @@ def send_gmail_html(
     from_addr: str,
     subject: str,
     html_body: str,
+    from_name: str = "",
 ) -> None:
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = from_addr
+    msg["From"] = f'"{from_name}" <{from_addr}>' if from_name else from_addr
     msg["To"] = to_addr
 
     msg.attach(MIMEText("Your email client does not support HTML.", "plain", "utf-8"))
@@ -682,22 +825,53 @@ def main() -> int:
     except Exception:
         pass
     subject = args.subject or f"Cardiology Weekly — {subject_date}"
-    cards_html = "".join(hero_card_html(a, s) for a, s in summaries)
-    headlines_block = headlines_html(headlines_only)
 
-    preview_firstname = args.preview_firstname if (args.dry_run or args.no_send) else ""
-    html_body = build_email_html(
-        subject=subject,
-        generated_at=generated_at,
-        summary_cards=cards_html,
-        headlines_block=headlines_block,
-        total_articles=len(unsent),
-        featured_count=len(summaries),
-        rct_count=rct_count,
-        firstname=preview_firstname,
-    )
+    # Get feedback webhook URL (optional)
+    feedback_webhook_url = os.getenv("FEEDBACK_WEBHOOK_URL", "")
+    if feedback_webhook_url:
+        print(f"📊 Feedback enabled: {feedback_webhook_url[:50]}...")
+
+    def build_personalized_content(user_email: str, firstname: str) -> str:
+        """Build fully personalized email HTML for a specific user."""
+        # Build feedback links for each article
+        def get_feedback_html(pmid: str, title: str) -> str:
+            if not feedback_webhook_url or not user_email:
+                return ""
+            return build_feedback_links(pmid, title, user_email, feedback_webhook_url)
+
+        # Build hero cards with feedback links
+        cards_html = "".join(
+            hero_card_html(a, s, get_feedback_html(a.pmid, a.title))
+            for a, s in summaries
+        )
+
+        # Build headlines with feedback links
+        feedback_map = {a.pmid: get_feedback_html(a.pmid, a.title) for a in headlines_only}
+        headlines_block = headlines_html(headlines_only, feedback_map)
+
+        # Build view saves URL
+        view_saves_url = build_view_saves_url(user_email, feedback_webhook_url)
+
+        # Fetch user's saved articles
+        user_saves = fetch_user_saves(user_email) if user_email else []
+        saves_block = your_saves_html(user_saves, view_saves_url)
+
+        return build_email_html(
+            subject=subject,
+            generated_at=generated_at,
+            summary_cards=cards_html,
+            headlines_block=headlines_block,
+            total_articles=len(unsent),
+            featured_count=len(summaries),
+            rct_count=rct_count,
+            firstname=firstname,
+            your_saves_block=saves_block,
+            view_saves_url=view_saves_url,
+        )
 
     if args.dry_run:
+        preview_firstname = args.preview_firstname if args.preview_firstname else ""
+        html_body = build_personalized_content("preview@example.com", preview_firstname)
         preview_path = Path("output/email_preview.html")
         preview_path.parent.mkdir(parents=True, exist_ok=True)
         preview_path.write_text(html_body, encoding="utf-8")
@@ -729,16 +903,7 @@ def main() -> int:
     for email, firstname in recipients:
         if not email:
             continue
-        personalized_html = build_email_html(
-            subject=subject,
-            generated_at=generated_at,
-            summary_cards=cards_html,
-            headlines_block=headlines_block,
-            total_articles=len(unsent),
-            featured_count=len(summaries),
-            rct_count=rct_count,
-            firstname=firstname,
-        )
+        personalized_html = build_personalized_content(email, firstname)
         if not args.no_send:
             send_gmail_html(
                 smtp_user=smtp_user,
@@ -747,6 +912,7 @@ def main() -> int:
                 from_addr=from_addr,
                 subject=subject,
                 html_body=personalized_html,
+                from_name=os.getenv("EMAIL_FROM_NAME", "Cardiology Weekly"),
             )
         sent_count += 1
         if delay_s > 0 and not args.no_send:

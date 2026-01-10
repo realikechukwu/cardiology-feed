@@ -46,6 +46,9 @@ On each run, the pipeline:
 │   ├── cardiology_recent.json
 │   └── email_preview.html
 │
+├── scripts/
+│   └── feedback_handler.gs   # Google Apps Script for feedback
+│
 ├── .github/
 │   └── workflows/
 │       └── weekly_digest.yml
@@ -180,6 +183,7 @@ Repo → Settings → Secrets and variables → Actions
 | GOOGLE_SHEET_ID           | Google Sheet ID (optional)         |
 | GOOGLE_CREDENTIALS        | Service account JSON (optional)    |
 | EMAIL_SEND_DELAY          | Delay in seconds (optional)        |
+| FEEDBACK_WEBHOOK_URL      | Google Apps Script URL (optional)  |
 
 
 ## Important:
@@ -224,6 +228,43 @@ Common adjustments:
 - Adjust lookback window (--days)
 - Update email recipients via GitHub Secrets
 - Change schedule in weekly_digest.yml
+
+
+## Feedback feature (optional)
+
+Users can mark articles as "useful" or "not relevant" directly from the email. This enables:
+- **Personal reading list**: Saved articles appear in a "Your Saves" section in the next digest
+- **Improved relevance**: Feedback data can inform future article prioritization
+
+### Setup
+
+1. **Deploy the Google Apps Script**
+   - Open your Google Sheet (same one used for subscribers)
+   - Go to Extensions > Apps Script
+   - Paste the contents of `scripts/feedback_handler.gs`
+   - Deploy > New deployment > Web app
+   - Execute as: Me, Who has access: Anyone
+   - Copy the Web App URL
+
+2. **Add the environment variable**
+   ```
+   FEEDBACK_WEBHOOK_URL=https://script.google.com/macros/s/your-script-id/exec
+   ```
+   Add to `.env` locally and to GitHub Secrets for Actions.
+
+3. **How it works**
+   - Each article in the digest shows: `Was this useful? Yes · No`
+   - Clicking logs feedback to a "feedback" sheet tab
+   - Next week's digest shows a "Your Saves" section with articles marked "Yes"
+
+### Data stored
+
+The feedback sheet contains:
+| timestamp | user | pmid | title | vote |
+|-----------|------|------|-------|------|
+| 2026-01-10T... | user@example.com | 12345678 | Article title... | yes |
+
+No additional costs - uses existing Google Sheets integration.
 
 
 ## Design philosophy
