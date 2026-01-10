@@ -217,9 +217,9 @@ def fetch_user_saves(user_email: str) -> List[SavedArticle]:
                 if email == user_email_lower and vote == "yes":
                     saves.append(SavedArticle(pmid=pmid, title=title, timestamp=timestamp))
 
-        # Return most recent first, limit to 10
+        # Return most recent first, limit to 5
         saves.reverse()
-        return saves[:10]
+        return saves[:5]
 
     except Exception as e:
         print(f"⚠️ Failed to fetch user saves: {e}")
