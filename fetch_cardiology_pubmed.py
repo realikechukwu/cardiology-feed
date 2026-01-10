@@ -32,8 +32,8 @@ try:
 except ImportError:
     print("⚠️  python-dotenv not installed. Install with: pip install python-dotenv", file=sys.stderr)
 
-# Configure journals
-TOP_10_JOURNALS = [
+# Configure journals - Cardiology-specific (include all articles)
+CARDIOLOGY_JOURNALS = [
     "Circulation",
     "Journal of the American College of Cardiology",
     "European Heart Journal",
@@ -44,6 +44,40 @@ TOP_10_JOURNALS = [
     "American Heart Journal",
     "JACC: Heart Failure",
     "JACC: Cardiovascular Imaging",
+    "Heart (British Cardiac Society)",  # BMJ Heart
+]
+
+# General medical journals - only include cardiology-related articles
+GENERAL_JOURNALS = [
+    "The New England journal of medicine",
+    "Lancet",
+    "Nature",
+]
+
+# MeSH terms and title keywords for filtering cardiology content from general journals
+CARDIOLOGY_MESH_TERMS = [
+    "Cardiovascular Diseases",
+    "Heart Diseases",
+    "Cardiology",
+    "Myocardial Infarction",
+    "Heart Failure",
+    "Arrhythmias, Cardiac",
+    "Coronary Artery Disease",
+    "Atrial Fibrillation",
+    "Hypertension",
+]
+
+CARDIOLOGY_TITLE_KEYWORDS = [
+    "cardiac",
+    "cardiovascular",
+    "heart",
+    "arrhythmia",
+    "myocardial",
+    "coronary",
+    "atrial fibrillation",
+    "heart failure",
+    "cardiomyopathy",
+    "valvular",
 ]
 
 # Publication types to prioritize (original research and reviews)
@@ -85,6 +119,15 @@ def http_get(url: str, timeout: int = 30, headers: Optional[Dict[str, str]] = No
 def build_journal_query(journals: List[str]) -> str:
     parts = [f'"{j}"[jour]' for j in journals]
     return "(" + " OR ".join(parts) + ")"
+
+
+def build_general_journal_cardiology_query(journals: List[str], mesh_terms: List[str], title_keywords: List[str]) -> str:
+    """Build query for general journals filtered by cardiology MeSH terms or title keywords."""
+    journal_part = "(" + " OR ".join([f'"{j}"[jour]' for j in journals]) + ")"
+    mesh_part = "(" + " OR ".join([f'"{m}"[MeSH]' for m in mesh_terms]) + ")"
+    title_part = "(" + " OR ".join([f'{k}[ti]' for k in title_keywords]) + ")"
+    cardiology_filter = f"({mesh_part} OR {title_part})"
+    return f"({journal_part} AND {cardiology_filter})"
 
 
 def esearch_pmids(
@@ -401,22 +444,48 @@ def main() -> int:
     output_path = Path(args.out)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    query = build_journal_query(TOP_10_JOURNALS)
+    # Query 1: Cardiology-specific journals (all articles)
+    cardio_query = build_journal_query(CARDIOLOGY_JOURNALS)
+
+    # Query 2: General journals with cardiology filter
+    general_query = build_general_journal_cardiology_query(
+        GENERAL_JOURNALS, CARDIOLOGY_MESH_TERMS, CARDIOLOGY_TITLE_KEYWORDS
+    )
 
     print(f"\n🔍 Searching for articles from last {args.days} days...")
-    pmids, count = esearch_pmids(
-        query=query,
+
+    # Search cardiology journals
+    print("  📚 Cardiology journals...")
+    cardio_pmids, cardio_count = esearch_pmids(
+        query=cardio_query,
         days=args.days,
         max_results=args.max,
         api_key=api_key,
         email=email,
     )
+    print(f"     Found {len(cardio_pmids)} articles (total available: {cardio_count})")
+
+    # Search general journals with cardiology filter
+    print("  🌐 General journals (cardiology-filtered)...")
+    general_pmids, general_count = esearch_pmids(
+        query=general_query,
+        days=args.days,
+        max_results=args.max,
+        api_key=api_key,
+        email=email,
+    )
+    print(f"     Found {len(general_pmids)} articles (total available: {general_count})")
+
+    # Merge PMIDs (avoid duplicates)
+    all_pmids_set = set(cardio_pmids) | set(general_pmids)
+    pmids = list(all_pmids_set)
+    count = cardio_count + general_count
 
     if not pmids:
         print("No PMIDs found.")
         return 0
 
-    print(f"✓ Found {len(pmids)} articles (total available: {count})")
+    print(f"✓ Total: {len(pmids)} unique articles")
     print("📥 Fetching article details...")
     articles = efetch_details(pmids, api_key=api_key, email=email)
 
@@ -465,7 +534,10 @@ def main() -> int:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "run_date": run_date,
         "days": args.days,
-        "journals": TOP_10_JOURNALS,
+        "journals": {
+            "cardiology_specific": CARDIOLOGY_JOURNALS,
+            "general_filtered": GENERAL_JOURNALS,
+        },
         "total_fetched": len(articles),
         "digest_count_pre_dedupe": len(digest_articles),
         "digest_count": len(deduped_digest),
