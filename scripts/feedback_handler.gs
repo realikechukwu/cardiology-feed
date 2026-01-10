@@ -357,3 +357,134 @@ function getUserSavesInternal(userEmail) {
 function getUserSaves(userEmail) {
   return getUserSavesInternal(userEmail);
 }
+
+
+// ============================================
+// WELCOME EMAIL - Triggered on form submit
+// ============================================
+
+/**
+ * Trigger this function when the subscribe form is submitted.
+ *
+ * Setup:
+ * 1. In Apps Script, go to Triggers (clock icon)
+ * 2. Add Trigger:
+ *    - Function: onFormSubmit
+ *    - Event source: From spreadsheet
+ *    - Event type: On form submit
+ * 3. Save and authorize
+ */
+function onFormSubmit(e) {
+  try {
+    // Only trigger for subscribers sheet, not unsubscribers or others
+    var sheetName = e.range.getSheet().getName().toLowerCase();
+    if (sheetName !== 'subscribers') return;
+
+    // Get form response data
+    var values = e.values;
+    if (!values || values.length < 3) return;
+
+    // Assuming form structure: Timestamp, Firstname, Email (columns A, B, C)
+    var firstname = values[1] || '';
+    var email = values[2] || '';
+
+    if (!email || !email.includes('@')) return;
+
+    sendWelcomeEmail(email, firstname);
+
+  } catch (err) {
+    console.error('Welcome email error: ' + err.toString());
+  }
+}
+
+/**
+ * Send welcome email to new subscriber
+ */
+function sendWelcomeEmail(email, firstname) {
+  var greeting = firstname ? ('Hi ' + firstname + ',') : 'Hi,';
+
+  var subject = 'Welcome to Cardiology Weekly';
+
+  var htmlBody = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body style="margin:0; padding:0; background:#f5f5f5; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <div style="max-width:600px; margin:0 auto; padding:24px 16px;">
+
+    <div style="background:#fff; border:1px solid #e0e0e0; border-radius:8px; padding:24px; margin-bottom:20px;">
+      <h1 style="font-size:22px; margin:0 0 16px; color:#1a1a1a;">Welcome to Cardiology Weekly</h1>
+      <p style="font-size:15px; color:#333; line-height:1.6; margin:0 0 16px;">
+        ${greeting}
+      </p>
+      <p style="font-size:15px; color:#333; line-height:1.6; margin:0 0 16px;">
+        You're now subscribed to the Weekly Cardiology Digest. Every Sunday, you'll receive a curated summary of the latest cardiology research from top journals.
+      </p>
+    </div>
+
+    <div style="background:#fff; border:1px solid #e0e0e0; border-radius:8px; padding:24px; margin-bottom:20px;">
+      <h2 style="font-size:16px; margin:0 0 16px; color:#1a1a1a;">How to get the most out of your digest</h2>
+
+      <div style="margin-bottom:16px;">
+        <h3 style="font-size:14px; margin:0 0 6px; color:#1a1a1a;">Clicking article titles</h3>
+        <p style="font-size:14px; color:#555; line-height:1.5; margin:0;">
+          Each article title is a link. Click it to go straight to the PubMed abstract.
+        </p>
+      </div>
+
+      <div style="margin-bottom:16px;">
+        <h3 style="font-size:14px; margin:0 0 6px; color:#1a1a1a;">Giving feedback</h3>
+        <p style="font-size:14px; color:#555; line-height:1.5; margin:0;">
+          Under each article you'll see: <em>Was this useful? Yes · No</em><br>
+          Click <strong>Yes</strong> to save articles you find valuable. A new tab will open briefly to confirm — just close it and continue reading.
+        </p>
+      </div>
+
+      <div style="margin-bottom:16px;">
+        <h3 style="font-size:14px; margin:0 0 6px; color:#1a1a1a;">Viewing your saved articles</h3>
+        <p style="font-size:14px; color:#555; line-height:1.5; margin:0;">
+          At the bottom of every email, click <strong>View your saved articles</strong> to see everything you've marked as useful. It's your personal reading list.
+        </p>
+      </div>
+
+      <div style="margin-bottom:16px;">
+        <h3 style="font-size:14px; margin:0 0 6px; color:#1a1a1a;">Your Saves section</h3>
+        <p style="font-size:14px; color:#555; line-height:1.5; margin:0;">
+          If you've saved articles before, you'll see a <strong>Your Saves →</strong> section at the top of your next digest. Click it to view all your saves.
+        </p>
+      </div>
+
+      <div>
+        <h3 style="font-size:14px; margin:0 0 6px; color:#1a1a1a;">Avoid the spam folder</h3>
+        <p style="font-size:14px; color:#555; line-height:1.5; margin:0;">
+          Add the sender to your contacts. If it lands in spam, mark it as "Not spam". On Gmail, drag it to your Primary tab if it appears in Promotions.
+        </p>
+      </div>
+    </div>
+
+    <div style="text-align:center; color:#999; font-size:12px; padding:16px;">
+      Your first digest will arrive this Sunday.<br>
+      Questions? Just reply to this email.
+    </div>
+
+  </div>
+</body>
+</html>`;
+
+  GmailApp.sendEmail(email, subject, 'Welcome to Cardiology Weekly', {
+    htmlBody: htmlBody,
+    name: 'Cardiology Weekly'
+  });
+}
+
+/**
+ * Test function - send welcome email to yourself
+ * Run this manually to test the welcome email
+ */
+function testWelcomeEmail() {
+  var testEmail = Session.getActiveUser().getEmail();
+  sendWelcomeEmail(testEmail, 'Test');
+}
