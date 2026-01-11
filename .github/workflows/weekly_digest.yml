@@ -43,6 +43,7 @@ jobs:
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           EMAIL_SEND_DELAY: ${{ secrets.EMAIL_SEND_DELAY }}
+          FEEDBACK_WEBHOOK_URL: ${{ secrets.FEEDBACK_WEBHOOK_URL }}
         run: |
           python run_weekly.py --days 7 --max 300
 
