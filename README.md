@@ -3,7 +3,7 @@
 A fully automated pipeline that:
 - fetches recent cardiology research from PubMed,
 - filters and classifies high-value studies,
-- generates concise AI summaries,
+- generates concise structured summaries from the abstract,
 - emails a formatted weekly digest via Gmail,
 - and **deduplicates papers across weeks** using a persisted state file.
 
