@@ -32,53 +32,22 @@ try:
 except ImportError:
     print("⚠️  python-dotenv not installed. Install with: pip install python-dotenv", file=sys.stderr)
 
-# Configure journals - Cardiology-specific (include all articles)
-CARDIOLOGY_JOURNALS = [
-    "Circulation",
-    "Journal of the American College of Cardiology",
-    "European Heart Journal",
-    "JAMA Cardiology",
-    "Circulation: Heart Failure",
-    "Circulation: Arrhythmia and Electrophysiology",
-    "Heart",
-    "American Heart Journal",
-    "JACC: Heart Failure",
-    "JACC: Cardiovascular Imaging",
-    "Heart (British Cardiac Society)",  # BMJ Heart
-]
 
-# General medical journals - only include cardiology-related articles
-GENERAL_JOURNALS = [
-    "The New England journal of medicine",
-    "Lancet",
-    "Nature",
-]
+# -------------------------
+# Specialty Config Loader
+# -------------------------
+def load_specialty_config(specialty: str) -> Dict[str, Any]:
+    """Load specialty configuration from specialties/{specialty}.json"""
+    config_path = Path(__file__).parent / "specialties" / f"{specialty}.json"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Specialty config not found: {config_path}")
+    with open(config_path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-# MeSH terms and title keywords for filtering cardiology content from general journals
-CARDIOLOGY_MESH_TERMS = [
-    "Cardiovascular Diseases",
-    "Heart Diseases",
-    "Cardiology",
-    "Myocardial Infarction",
-    "Heart Failure",
-    "Arrhythmias, Cardiac",
-    "Coronary Artery Disease",
-    "Atrial Fibrillation",
-    "Hypertension",
-]
 
-CARDIOLOGY_TITLE_KEYWORDS = [
-    "cardiac",
-    "cardiovascular",
-    "heart",
-    "arrhythmia",
-    "myocardial",
-    "coronary",
-    "atrial fibrillation",
-    "heart failure",
-    "cardiomyopathy",
-    "valvular",
-]
+def get_config_value(config: Dict[str, Any], key: str, default: Any = None) -> Any:
+    """Get a config value with optional default."""
+    return config.get(key, default)
 
 # Publication types to prioritize (original research and reviews)
 PRIORITY_PUB_TYPES = {
@@ -409,23 +378,48 @@ def make_dated_output_path(base_out: Path, run_date: str) -> Path:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Fetch and filter cardiology research articles")
+    ap = argparse.ArgumentParser(description="Fetch and filter research articles by specialty")
+    ap.add_argument("--specialty", type=str, default="cardiology",
+                    help="Specialty to fetch (default: cardiology). Loads config from specialties/{specialty}.json")
     ap.add_argument("--days", type=int, default=7, help="Look back this many days (default: 7)")
     ap.add_argument("--max", type=int, default=300, help="Max PMIDs to retrieve (default: 300)")
-    ap.add_argument("--out", type=str, default="output/cardiology_recent.json",
-                    help="Stable output JSON filename (latest). A date-stamped file is also written alongside.")
+    ap.add_argument("--out", type=str, default=None,
+                    help="Stable output JSON filename. Defaults to output/{specialty}_recent.json")
     ap.add_argument("--include-no-abstract", action="store_true", help="Include articles without abstracts")
     ap.add_argument("--api-key", type=str, default=None, help="NCBI API key")
     ap.add_argument("--email", type=str, default=None, help="Contact email for NCBI")
-
-    # NEW args
-    ap.add_argument("--state", type=str, default="state/seen_pmids.json",
-                    help="Path to dedupe state file (default: state/seen_pmids.json)")
+    ap.add_argument("--state", type=str, default=None,
+                    help="Path to dedupe state file. Defaults to state/{specialty}_seen_pmids.json")
     ap.add_argument("--no-dedupe", action="store_true",
                     help="Disable dedupe (always include items even if seen before)")
     ap.add_argument("--test-mode", action="store_true",
                     help="Test mode: skip all state file reading/writing (ignores seen_pmids.json entirely)")
     args = ap.parse_args()
+
+    # Load specialty config
+    try:
+        config = load_specialty_config(args.specialty)
+        print(f"📋 Specialty: {config.get('name', args.specialty)}")
+    except FileNotFoundError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 1
+
+    # Set defaults based on specialty (backward compatible with cardiology)
+    if args.specialty == "cardiology":
+        default_out = "output/cardiology_recent.json"
+        default_state = "state/seen_pmids.json"
+    else:
+        default_out = f"output/{args.specialty}_recent.json"
+        default_state = f"state/{args.specialty}_seen_pmids.json"
+
+    output_file = args.out or default_out
+    state_file = args.state or default_state
+
+    # Extract config values
+    specialty_journals = config.get("specialty_journals", [])
+    general_journals = config.get("general_journals", [])
+    mesh_terms = config.get("mesh_terms", [])
+    title_keywords = config.get("title_keywords", [])
 
     email = args.email or os.getenv("NCBI_EMAIL")
     api_key = args.api_key or os.getenv("NCBI_API_KEY")
@@ -441,45 +435,54 @@ def main() -> int:
     else:
         print("⚠️  No API key (requests will be slower)")
 
-    output_path = Path(args.out)
+    output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Query 1: Cardiology-specific journals (all articles)
-    cardio_query = build_journal_query(CARDIOLOGY_JOURNALS)
+    # Query 1: Specialty-specific journals (all articles)
+    specialty_query = build_journal_query(specialty_journals) if specialty_journals else None
 
-    # Query 2: General journals with cardiology filter
-    general_query = build_general_journal_cardiology_query(
-        GENERAL_JOURNALS, CARDIOLOGY_MESH_TERMS, CARDIOLOGY_TITLE_KEYWORDS
-    )
+    # Query 2: General journals with specialty filter
+    general_query = None
+    if general_journals and (mesh_terms or title_keywords):
+        general_query = build_general_journal_cardiology_query(
+            general_journals, mesh_terms, title_keywords
+        )
 
     print(f"\n🔍 Searching for articles from last {args.days} days...")
 
-    # Search cardiology journals
-    print("  📚 Cardiology journals...")
-    cardio_pmids, cardio_count = esearch_pmids(
-        query=cardio_query,
-        days=args.days,
-        max_results=args.max,
-        api_key=api_key,
-        email=email,
-    )
-    print(f"     Found {len(cardio_pmids)} articles (total available: {cardio_count})")
+    specialty_pmids = []
+    specialty_count = 0
+    general_pmids = []
+    general_count = 0
 
-    # Search general journals with cardiology filter
-    print("  🌐 General journals (cardiology-filtered)...")
-    general_pmids, general_count = esearch_pmids(
-        query=general_query,
-        days=args.days,
-        max_results=args.max,
-        api_key=api_key,
-        email=email,
-    )
-    print(f"     Found {len(general_pmids)} articles (total available: {general_count})")
+    # Search specialty journals
+    if specialty_query:
+        print("  📚 Specialty journals...")
+        specialty_pmids, specialty_count = esearch_pmids(
+            query=specialty_query,
+            days=args.days,
+            max_results=args.max,
+            api_key=api_key,
+            email=email,
+        )
+        print(f"     Found {len(specialty_pmids)} articles (total available: {specialty_count})")
+
+    # Search general journals with specialty filter
+    if general_query:
+        print("  🌐 General journals (specialty-filtered)...")
+        general_pmids, general_count = esearch_pmids(
+            query=general_query,
+            days=args.days,
+            max_results=args.max,
+            api_key=api_key,
+            email=email,
+        )
+        print(f"     Found {len(general_pmids)} articles (total available: {general_count})")
 
     # Merge PMIDs (avoid duplicates)
-    all_pmids_set = set(cardio_pmids) | set(general_pmids)
+    all_pmids_set = set(specialty_pmids) | set(general_pmids)
     pmids = list(all_pmids_set)
-    count = cardio_count + general_count
+    count = specialty_count + general_count
 
     if not pmids:
         print("No PMIDs found.")
@@ -495,8 +498,8 @@ def main() -> int:
     # Prepare digest (priority + standard)
     digest_articles = categorized["priority"] + categorized["standard"]
 
-    # NEW: Dedupe across runs
-    state_path = Path(args.state)
+    # Dedupe across runs
+    state_path = Path(state_file)
     skip_state = args.test_mode or args.no_dedupe
     seen_pmids = load_seen_pmids(state_path) if not skip_state else set()
     deduped_digest, removed_dupes = dedupe_articles_by_pmid(digest_articles, seen_pmids)
@@ -535,8 +538,8 @@ def main() -> int:
         "run_date": run_date,
         "days": args.days,
         "journals": {
-            "cardiology_specific": CARDIOLOGY_JOURNALS,
-            "general_filtered": GENERAL_JOURNALS,
+            "specialty_specific": config["specialty_journals"],
+            "general_filtered": config["general_journals"],
         },
         "total_fetched": len(articles),
         "digest_count_pre_dedupe": len(digest_articles),

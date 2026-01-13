@@ -364,6 +364,17 @@ function getUserSaves(userEmail) {
 // ============================================
 
 /**
+ * Normalize specialty name from form response
+ */
+function normalizeSpecialty(specialty) {
+  var lower = (specialty || '').toLowerCase().trim();
+  if (lower === 'cardiology') return 'cardiology';
+  if (lower === 'gp' || lower === 'general practice') return 'gp';
+  if (lower === 'spine' || lower === 'spine surgery') return 'spine';
+  return 'cardiology'; // Default fallback
+}
+
+/**
  * Trigger this function when the subscribe form is submitted.
  *
  * Setup:
@@ -384,13 +395,14 @@ function onFormSubmit(e) {
     var values = e.values;
     if (!values || values.length < 3) return;
 
-    // Assuming form structure: Timestamp, Firstname, Email (columns A, B, C)
+    // Form structure: Timestamp, Firstname, Email, Specialty (columns A, B, C, D)
     var firstname = values[1] || '';
     var email = values[2] || '';
+    var specialty = normalizeSpecialty(values[3] || 'cardiology');
 
     if (!email || !email.includes('@')) return;
 
-    sendWelcomeEmail(email, firstname);
+    sendWelcomeEmail(email, firstname, specialty);
 
   } catch (err) {
     console.error('Welcome email error: ' + err.toString());
@@ -400,41 +412,39 @@ function onFormSubmit(e) {
 /**
  * Send welcome email to new subscriber
  */
-function sendWelcomeEmail(email, firstname) {
+function sendWelcomeEmail(email, firstname, specialty) {
+  specialty = specialty || 'cardiology';
   var greeting = firstname ? ('Hi ' + firstname + ',') : 'Hi,';
 
-  var subject = 'Welcome to Cardiology Weekly';
+  // Specialty-specific configuration
+  var config = {
+    cardiology: {
+      title: 'Cardiology Weekly',
+      displayName: 'cardiology',
+      senderName: 'Ike Chukwudi | Cardiology Digest',
+      enableFeedback: true
+    },
+    gp: {
+      title: 'General Practice Weekly',
+      displayName: 'general practice',
+      senderName: 'Ike Chukwudi | General Practice Digest',
+      enableFeedback: false
+    },
+    spine: {
+      title: 'Spine Surgery Weekly',
+      displayName: 'spine surgery',
+      senderName: 'Ike Chukwudi | Spine Surgery Digest',
+      enableFeedback: false
+    }
+  };
 
-  var htmlBody = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-</head>
-<body style="margin:0; padding:0; background:#f5f5f5; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
-  <div style="max-width:600px; margin:0 auto; padding:24px 16px;">
+  var cfg = config[specialty] || config.cardiology;
+  var subject = 'Welcome to ' + cfg.title;
 
-    <div style="background:#fff; border:1px solid #e0e0e0; border-radius:8px; padding:24px; margin-bottom:20px;">
-      <h1 style="font-size:22px; margin:0 0 16px; color:#1a1a1a;">Welcome to Cardiology Weekly</h1>
-      <p style="font-size:15px; color:#333; line-height:1.6; margin:0 0 16px;">
-        ${greeting}
-      </p>
-      <p style="font-size:15px; color:#333; line-height:1.6; margin:0 0 16px;">
-        You're receiving this email because you signed up to receive the Cardiology Digest. Every Sunday, you'll get a curated summary of the latest cardiology research from top journals.
-      </p>
-    </div>
-
-    <div style="background:#fff; border:1px solid #e0e0e0; border-radius:8px; padding:24px; margin-bottom:20px;">
-      <h2 style="font-size:16px; margin:0 0 16px; color:#1a1a1a;">How to get the most out of your digest</h2>
-
-      <div style="margin-bottom:16px;">
-        <h3 style="font-size:14px; margin:0 0 6px; color:#1a1a1a;">Clicking article titles</h3>
-        <p style="font-size:14px; color:#555; line-height:1.5; margin:0;">
-          Each article title is a link. Click it to go straight to the PubMed abstract.
-        </p>
-      </div>
-
+  // Build feedback instructions (only for cardiology)
+  var feedbackSection = '';
+  if (cfg.enableFeedback) {
+    feedbackSection = `
       <div style="margin-bottom:16px;">
         <h3 style="font-size:14px; margin:0 0 6px; color:#1a1a1a;">Giving feedback</h3>
         <p style="font-size:14px; color:#555; line-height:1.5; margin:0;">
@@ -456,6 +466,40 @@ function sendWelcomeEmail(email, firstname) {
           If you've saved articles before, you'll see a <strong>Your Saves →</strong> section at the top of your next digest. Click it to view all your saves.
         </p>
       </div>
+    `;
+  }
+
+  var htmlBody = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body style="margin:0; padding:0; background:#f5f5f5; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <div style="max-width:600px; margin:0 auto; padding:24px 16px;">
+
+    <div style="background:#fff; border:1px solid #e0e0e0; border-radius:8px; padding:24px; margin-bottom:20px;">
+      <h1 style="font-size:22px; margin:0 0 16px; color:#1a1a1a;">Welcome to ${cfg.title}</h1>
+      <p style="font-size:15px; color:#333; line-height:1.6; margin:0 0 16px;">
+        ${greeting}
+      </p>
+      <p style="font-size:15px; color:#333; line-height:1.6; margin:0 0 16px;">
+        You're receiving this email because you signed up to receive the ${cfg.displayName} digest. Every Sunday, you'll get a curated summary of the latest ${cfg.displayName} research from top journals.
+      </p>
+    </div>
+
+    <div style="background:#fff; border:1px solid #e0e0e0; border-radius:8px; padding:24px; margin-bottom:20px;">
+      <h2 style="font-size:16px; margin:0 0 16px; color:#1a1a1a;">How to get the most out of your digest</h2>
+
+      <div style="margin-bottom:16px;">
+        <h3 style="font-size:14px; margin:0 0 6px; color:#1a1a1a;">Clicking article titles</h3>
+        <p style="font-size:14px; color:#555; line-height:1.5; margin:0;">
+          Each article title is a link. Click it to go straight to the PubMed abstract.
+        </p>
+      </div>
+
+      ${feedbackSection}
 
       <div>
         <h3 style="font-size:14px; margin:0 0 6px; color:#1a1a1a;">Avoid the spam folder</h3>
@@ -475,17 +519,27 @@ function sendWelcomeEmail(email, firstname) {
 </body>
 </html>`;
 
-  GmailApp.sendEmail(email, subject, 'Welcome to Cardiology Weekly', {
+  GmailApp.sendEmail(email, subject, 'Welcome to ' + cfg.title, {
     htmlBody: htmlBody,
-    name: 'Ike Chukwudi | Cardiology Digest'
+    name: cfg.senderName
   });
 }
 
 /**
- * Test function - send welcome email to yourself
- * Run this manually to test the welcome email
+ * Test functions - send welcome email to yourself
+ * Run these manually to test the welcome emails
  */
-function testWelcomeEmail() {
+function testWelcomeEmailCardiology() {
   var testEmail = Session.getActiveUser().getEmail();
-  sendWelcomeEmail(testEmail, 'Test');
+  sendWelcomeEmail(testEmail, 'Test', 'cardiology');
+}
+
+function testWelcomeEmailGP() {
+  var testEmail = Session.getActiveUser().getEmail();
+  sendWelcomeEmail(testEmail, 'Test', 'gp');
+}
+
+function testWelcomeEmailSpine() {
+  var testEmail = Session.getActiveUser().getEmail();
+  sendWelcomeEmail(testEmail, 'Test', 'spine');
 }
