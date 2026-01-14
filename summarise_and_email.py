@@ -56,6 +56,15 @@ def read_json(path: Path) -> Dict[str, Any]:
         return json.load(f)
 
 
+def load_specialty_config(specialty: str) -> Dict[str, Any]:
+    """Load specialty configuration from specialties/{specialty}.json"""
+    config_path = Path(__file__).parent / "specialties" / f"{specialty}.json"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Specialty config not found: {config_path}")
+    with open(config_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -83,14 +92,29 @@ def save_sent_pmids(state_path: Path, sent_pmids: set[str]) -> None:
     write_json(state_path, payload)
 
 
-def fetch_subscribers_from_sheet() -> List[Tuple[str, str]]:
+def normalize_specialty(specialty: str) -> str:
+    """Normalize specialty names to match command-line arguments."""
+    specialty_lower = specialty.lower().strip()
+    # Map common variations to canonical names
+    mappings = {
+        "cardiology": "cardiology",
+        "gp": "gp",
+        "general practice": "gp",
+        "spine": "spine",
+        "spine surgery": "spine",
+    }
+    return mappings.get(specialty_lower, specialty_lower)
+
+
+def fetch_subscribers_from_sheet(subscribers_sheet: str = "subscribers", specialty_filter: Optional[str] = None) -> List[Tuple[str, str]]:
     """
     Fetch subscriber emails and first names from Google Sheet, excluding unsubscribers.
 
     Sheet structure:
-    - Sheet "subscribers": col B = firstname, col C = email
+    - Sheet {subscribers_sheet}: col B = firstname, col C = email, col D = specialty (optional)
     - Sheet "unsubscribers": col B = firstname, col C = email
 
+    If specialty_filter is provided, only returns subscribers where col D matches the specialty.
     Returns list of (email, firstname) tuples for active subscribers.
     Requires GOOGLE_SHEET_ID and GOOGLE_CREDENTIALS env vars.
     """
@@ -116,21 +140,30 @@ def fetch_subscribers_from_sheet() -> List[Tuple[str, str]]:
 
         spreadsheet = client.open_by_key(sheet_id)
 
-        # Get subscribers from "subscribers" sheet (col B = firstname, col C = email)
+        # Get subscribers from specified sheet (col B = firstname, col C = email, col D = specialty)
         subscribers_dict: Dict[str, str] = {}  # email -> firstname
         try:
-            sub_sheet = spreadsheet.worksheet("subscribers")
-            # Get all values to pair firstname (col B) with email (col C)
+            sub_sheet = spreadsheet.worksheet(subscribers_sheet)
+            # Get all values to pair firstname (col B) with email (col C) and specialty (col D)
             all_rows = sub_sheet.get_all_values()[1:]  # Skip header
             for row in all_rows:
                 if len(row) >= 3:
                     firstname = str(row[1]).strip() if row[1] else ""
                     email = str(row[2]).strip().lower() if row[2] else ""
+                    specialty_raw = str(row[3]).strip() if len(row) >= 4 and row[3] else ""
+
+                    # Filter by specialty if specified (normalize both values for comparison)
+                    if specialty_filter:
+                        specialty_normalized = normalize_specialty(specialty_raw)
+                        filter_normalized = normalize_specialty(specialty_filter)
+                        if specialty_normalized != filter_normalized:
+                            continue
+
                     if email and "@" in email:
                         subscribers_dict[email] = firstname
         except Exception as e:
             if gspread and isinstance(e, gspread.exceptions.WorksheetNotFound):
-                print("⚠️ 'subscribers' sheet not found")
+                print(f"⚠️ '{subscribers_sheet}' sheet not found")
             else:
                 raise
 
@@ -388,12 +421,12 @@ def normalize_study_type(study_type: str) -> str:
     return " ".join(result)
 
 
-def summarise_one(client: OpenAI, model: str, a: Article) -> Dict[str, Any]:
+def summarise_one(client: OpenAI, model: str, a: Article, specialty_name: str = "cardiology") -> Dict[str, Any]:
     """
     Uses OpenAI Chat Completions API with strict JSON schema output.
     """
     system = (
-        "You are writing a brief editorial note for a cardiology digest. "
+        f"You are writing a brief editorial note for a {specialty_name.lower()} digest. "
         "Return JSON with exactly three fields:\n"
         "- study_type: Classify the design using one of these exact formats: "
         "'RCT', 'Meta-analysis', 'Systematic review', 'Prospective cohort', "
@@ -626,9 +659,11 @@ def build_email_html(
     firstname: str = "",
     your_saves_block: str = "",
     view_saves_url: str = "",
+    specialty_name: str = "Cardiology",
 ) -> str:
     """Email template with personalized greeting and optional saved articles."""
     human_date = format_human_date(generated_at)
+    specialty_lower = specialty_name.lower()
 
     rct_note = ""
     if rct_count > 0:
@@ -638,12 +673,12 @@ def build_email_html(
     if firstname:
         greeting = (
             f"<h2 style=\"margin:0 0 6px 0; font-size:18px; color:#1a1a1a;\">Hi {html_escape(firstname)},</h2>"
-            "<h3 style=\"margin:0; font-size:14px; color:#555; font-weight:500;\">This is your weekly cardiology digest. Enjoy!</h3>"
+            f"<h3 style=\"margin:0; font-size:14px; color:#555; font-weight:500;\">This is your weekly {specialty_lower} digest. Enjoy!</h3>"
         )
     else:
         greeting = (
             "<h2 style=\"margin:0 0 6px 0; font-size:18px; color:#1a1a1a;\">Hi,</h2>"
-            "<h3 style=\"margin:0; font-size:14px; color:#555; font-weight:500;\">This is your weekly cardiology digest. Enjoy!</h3>"
+            f"<h3 style=\"margin:0; font-size:14px; color:#555; font-weight:500;\">This is your weekly {specialty_lower} digest. Enjoy!</h3>"
         )
 
     return f"""\
@@ -669,7 +704,7 @@ def build_email_html(
       <!-- Header -->
       <div style="background:#ffffff; border:1px solid #e0e0e0; border-radius:8px; padding:24px; margin-bottom:20px;">
         <div style="font-size:24px; font-weight:700; margin-bottom:6px; color:#1a1a1a;">
-          Weekly Cardiology Digest
+          Weekly {html_escape(specialty_name)} Digest
         </div>
         <div style="color:#666; font-size:13px;">
           {html_escape(human_date)} · {total_articles} articles · {featured_count} featured{rct_note}
@@ -738,8 +773,12 @@ def send_gmail_html(
 # ----------------------------
 def main() -> int:
     ap = argparse.ArgumentParser(description="Summarise latest digest JSON and send as HTML email")
-    ap.add_argument("--latest-json", type=str, default=os.getenv("LATEST_JSON", "output/cardiology_recent.json"))
-    ap.add_argument("--sent-state", type=str, default=os.getenv("SENT_STATE", "state/sent_pmids.json"))
+    ap.add_argument("--specialty", type=str, default="cardiology",
+                    help="Specialty to run (default: cardiology). Loads config from specialties/{specialty}.json")
+    ap.add_argument("--latest-json", type=str, default=None,
+                    help="Path to latest JSON. Defaults to output/{specialty}_recent.json or LATEST_JSON env var")
+    ap.add_argument("--sent-state", type=str, default=None,
+                    help="Path to sent state file. Defaults to state/sent_pmids.json (cardiology) or state/{specialty}_sent_pmids.json")
     ap.add_argument("--max-summaries", type=int, default=10)
     ap.add_argument("--dry-run", action="store_true", help="Do not send email; write HTML preview to output/email_preview.html")
     ap.add_argument("--subject", type=str, default=None)
@@ -757,8 +796,28 @@ def main() -> int:
                     help="Delay (seconds) between per-recipient sends (default: 0)")
     args = ap.parse_args()
 
-    latest_path = Path(args.latest_json)
-    sent_state_path = Path(args.sent_state)
+    # Load specialty config
+    try:
+        specialty_config = load_specialty_config(args.specialty)
+        print(f"📋 Loaded config for: {specialty_config.get('name', args.specialty)}")
+    except FileNotFoundError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 1
+
+    # Set default paths based on specialty (backward compatible with cardiology)
+    if args.latest_json:
+        latest_path = Path(args.latest_json)
+    elif args.specialty == "cardiology":
+        latest_path = Path(os.getenv("LATEST_JSON", "output/cardiology_recent.json"))
+    else:
+        latest_path = Path(f"output/{args.specialty}_recent.json")
+
+    if args.sent_state:
+        sent_state_path = Path(args.sent_state)
+    elif args.specialty == "cardiology":
+        sent_state_path = Path(os.getenv("SENT_STATE", "state/sent_pmids.json"))
+    else:
+        sent_state_path = Path(f"state/{args.specialty}_sent_pmids.json")
 
     if not latest_path.exists():
         print(f"❌ Latest JSON not found: {latest_path}", file=sys.stderr)
@@ -806,7 +865,7 @@ def main() -> int:
     for a in to_sum:
         try:
             print(f"  Summarising: {a.pmid} — {a.title[:60]}...")
-            s = summarise_one(client, model, a)
+            s = summarise_one(client, model, a, specialty_config.get("name", "cardiology"))
             summaries.append((a, s))
         except Exception as e:
             print(f"⚠️ Summary failed for PMID {a.pmid}: {e}", file=sys.stderr)
@@ -824,12 +883,18 @@ def main() -> int:
         subject_date = parsed.strftime("%b %d, %Y").replace(" 0", " ")
     except Exception:
         pass
-    subject = args.subject or f"Cardiology Weekly — {subject_date}"
+    email_subject_prefix = specialty_config.get("email_subject_prefix", "Weekly Digest")
+    subject = args.subject or f"{email_subject_prefix} — {subject_date}"
 
-    # Get feedback webhook URL (optional)
-    feedback_webhook_url = os.getenv("FEEDBACK_WEBHOOK_URL", "")
-    if feedback_webhook_url:
-        print(f"📊 Feedback enabled: {feedback_webhook_url[:50]}...")
+    # Get feedback webhook URL (optional, only if enabled in specialty config)
+    enable_feedback = specialty_config.get("enable_feedback", False)
+    if enable_feedback:
+        feedback_webhook_url = os.getenv("FEEDBACK_WEBHOOK_URL", "")
+        if feedback_webhook_url:
+            print(f"📊 Feedback enabled for {specialty_config.get('name', args.specialty)}: {feedback_webhook_url[:50]}...")
+    else:
+        feedback_webhook_url = ""
+        print(f"📊 Feedback disabled for {specialty_config.get('name', args.specialty)}")
 
     def build_personalized_content(user_email: str, firstname: str) -> str:
         """Build fully personalized email HTML for a specific user."""
@@ -849,12 +914,14 @@ def main() -> int:
         feedback_map = {a.pmid: get_feedback_html(a.pmid, a.title) for a in headlines_only}
         headlines_block = headlines_html(headlines_only, feedback_map)
 
-        # Build view saves URL
-        view_saves_url = build_view_saves_url(user_email, feedback_webhook_url)
-
-        # Fetch user's saved articles
-        user_saves = fetch_user_saves(user_email) if user_email else []
-        saves_block = your_saves_html(user_saves, view_saves_url)
+        # Build view saves URL and fetch saves only if feedback is enabled
+        if enable_feedback:
+            view_saves_url = build_view_saves_url(user_email, feedback_webhook_url)
+            user_saves = fetch_user_saves(user_email) if user_email else []
+            saves_block = your_saves_html(user_saves, view_saves_url)
+        else:
+            view_saves_url = ""
+            saves_block = ""
 
         return build_email_html(
             subject=subject,
@@ -867,6 +934,7 @@ def main() -> int:
             firstname=firstname,
             your_saves_block=saves_block,
             view_saves_url=view_saves_url,
+            specialty_name=specialty_config.get("name", "Cardiology"),
         )
 
     if args.dry_run:
@@ -884,7 +952,8 @@ def main() -> int:
     from_addr = os.getenv("EMAIL_FROM", smtp_user)
 
     # Try fetching subscribers from Google Sheet first, fallback to EMAIL_TO
-    sheet_subscribers = fetch_subscribers_from_sheet()
+    # Use single "subscribers" sheet with specialty column for filtering
+    sheet_subscribers = fetch_subscribers_from_sheet("subscribers", specialty_filter=args.specialty)
     if sheet_subscribers:
         recipients = sheet_subscribers
     else:
@@ -905,6 +974,11 @@ def main() -> int:
             continue
         personalized_html = build_personalized_content(email, firstname)
         if not args.no_send:
+            # Build specialty-specific sender name
+            specialty_name = specialty_config.get("name", "Cardiology")
+            default_sender = f"Ike Chukwudi | {specialty_name} Digest"
+            sender_name = os.getenv("EMAIL_FROM_NAME", default_sender)
+
             send_gmail_html(
                 smtp_user=smtp_user,
                 smtp_app_password=smtp_app_password,
@@ -912,7 +986,7 @@ def main() -> int:
                 from_addr=from_addr,
                 subject=subject,
                 html_body=personalized_html,
-                from_name=os.getenv("EMAIL_FROM_NAME", "Ike Chukwudi | Cardiology Digest"),
+                from_name=sender_name,
             )
         sent_count += 1
         if delay_s > 0 and not args.no_send:

@@ -1,4 +1,4 @@
-name: Weekly Cardiology Digest
+name: Weekly Medical Digest (Multi-Specialty)
 
 on:
   schedule:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch: {}  # allows manual runs from the Actions tab
 
 concurrency:
-  group: weekly-cardiology-digest
+  group: weekly-medical-digest
   cancel-in-progress: false
 
 permissions:
@@ -31,7 +31,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run weekly digest pipeline
+      - name: Run Cardiology digest
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GMAIL_SMTP_USER: ${{ secrets.GMAIL_SMTP_USER }}
@@ -45,16 +45,53 @@ jobs:
           EMAIL_SEND_DELAY: ${{ secrets.EMAIL_SEND_DELAY }}
           FEEDBACK_WEBHOOK_URL: ${{ secrets.FEEDBACK_WEBHOOK_URL }}
         run: |
-          python run_weekly.py --days 7 --max 300
+          echo "Running Cardiology digest..."
+          python run_weekly.py --specialty cardiology --days 7 --max 300
+
+      - name: Run General Practice digest
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GMAIL_SMTP_USER: ${{ secrets.GMAIL_SMTP_USER }}
+          GMAIL_SMTP_APP_PASSWORD: ${{ secrets.GMAIL_SMTP_APP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          NCBI_EMAIL: ${{ secrets.NCBI_EMAIL }}
+          NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          EMAIL_SEND_DELAY: ${{ secrets.EMAIL_SEND_DELAY }}
+          FEEDBACK_WEBHOOK_URL: ${{ secrets.FEEDBACK_WEBHOOK_URL }}
+        run: |
+          echo "Running General Practice digest..."
+          python run_weekly.py --specialty gp --days 7 --max 300
+
+      - name: Run Spine Surgery digest
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GMAIL_SMTP_USER: ${{ secrets.GMAIL_SMTP_USER }}
+          GMAIL_SMTP_APP_PASSWORD: ${{ secrets.GMAIL_SMTP_APP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          NCBI_EMAIL: ${{ secrets.NCBI_EMAIL }}
+          NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          EMAIL_SEND_DELAY: ${{ secrets.EMAIL_SEND_DELAY }}
+          FEEDBACK_WEBHOOK_URL: ${{ secrets.FEEDBACK_WEBHOOK_URL }}
+        run: |
+          echo "Running Spine Surgery digest..."
+          python run_weekly.py --specialty spine --days 7 --max 300
 
       - name: Commit updated sent PMIDs state
         run: |
-          if git status --porcelain | grep -q "state/sent_pmids.json"; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add state/sent_pmids.json
-            git commit -m "Update sent PMIDs after weekly digest"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Add all state files (cardiology, gp, spine)
+          if git status --porcelain | grep -q "state/"; then
+            git add state/*.json
+            git commit -m "Update sent PMIDs after weekly digest (multi-specialty)"
             git push
           else
-            echo "No sent_pmids.json changes to commit"
+            echo "No state file changes to commit"
           fi

@@ -40,12 +40,14 @@ def run_cmd(cmd: list[str]) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Run fetch + summarise/email pipeline")
+    ap.add_argument("--specialty", type=str, default="cardiology",
+                    help="Specialty to run (default: cardiology). Loads config from specialties/{specialty}.json")
     ap.add_argument("--days", type=int, default=7, help="Look back this many days (default: 7)")
     ap.add_argument("--max", type=int, default=300, help="Max PMIDs to retrieve (default: 300)")
     ap.add_argument("--email", type=str, default=os.getenv("NCBI_EMAIL"), help="NCBI contact email (or set NCBI_EMAIL)")
     ap.add_argument("--api-key", type=str, default=os.getenv("NCBI_API_KEY"), help="NCBI API key (or set NCBI_API_KEY)")
-    ap.add_argument("--out", type=str, default=os.getenv("LATEST_JSON", "output/cardiology_recent.json"),
-                    help="Stable output JSON filename for fetch step (default: output/cardiology_recent.json)")
+    ap.add_argument("--out", type=str, default=None,
+                    help="Stable output JSON filename. Defaults to output/{specialty}_recent.json")
     ap.add_argument("--include-no-abstract", action="store_true", help="Include articles without abstracts in fetch step")
     ap.add_argument("--no-dedupe", action="store_true", help="Disable dedupe in fetch step")
     ap.add_argument("--dry-run-email", action="store_true", help="Do not send email; generate HTML preview only")
@@ -54,6 +56,13 @@ def main() -> int:
     ap.add_argument("--test-mode", action="store_true",
                     help="Test mode: skip all state file reading/writing in both fetch and email steps")
     args = ap.parse_args()
+
+    # Set default output path based on specialty (backward compatible with cardiology)
+    if args.specialty == "cardiology":
+        default_out = os.getenv("LATEST_JSON", "output/cardiology_recent.json")
+    else:
+        default_out = f"output/{args.specialty}_recent.json"
+    output_path = args.out or default_out
 
     repo_root = Path(__file__).resolve().parent
     fetch_script = repo_root / "fetch_cardiology_pubmed.py"
@@ -71,11 +80,11 @@ def main() -> int:
         return 1
 
     # Ensure LATEST_JSON env var is consistent for the summarise/email step
-    os.environ["LATEST_JSON"] = args.out
+    os.environ["LATEST_JSON"] = output_path
 
     try:
         # 1) Fetch step
-        fetch_cmd = [sys.executable, str(fetch_script), "--days", str(args.days), "--max", str(args.max), "--out", args.out, "--email", args.email]
+        fetch_cmd = [sys.executable, str(fetch_script), "--specialty", args.specialty, "--days", str(args.days), "--max", str(args.max), "--out", output_path, "--email", args.email]
         if args.api_key:
             fetch_cmd += ["--api-key", args.api_key]
         if args.include_no_abstract:
@@ -88,7 +97,7 @@ def main() -> int:
         run_cmd(fetch_cmd)
 
         # 2) Summarise + email step
-        email_cmd = [sys.executable, str(email_script)]
+        email_cmd = [sys.executable, str(email_script), "--specialty", args.specialty]
         if args.dry_run_email:
             email_cmd += ["--dry-run"]
         email_cmd += ["--send-delay", str(args.send_delay)]
