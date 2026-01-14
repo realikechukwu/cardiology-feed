@@ -1,0 +1,56 @@
+{
+  "name": "Spine Surgery",
+  "slug": "spine",
+  "description": "Spine surgery and spinal disorders",
+
+  "specialty_journals": [
+    "Spine",
+    "The Spine Journal",
+    "European Spine Journal",
+    "Global Spine Journal",
+    "Journal of Spine Surgery",
+    "Clinical Spine Surgery",
+    "Spine Surgery and Related Research",
+    "International Journal of Spine Surgery",
+    "The Bone and Joint Journal",
+    "Journal of Neurosurgery: Spine",
+    "World Neurosurgery"
+  ],
+
+  "general_journals": [
+    "The New England journal of medicine",
+    "Lancet",
+    "Nature",
+    "BMJ"
+  ],
+
+  "mesh_terms": [
+    "Spine",
+    "Spinal Diseases",
+    "Spinal Cord Injuries",
+    "Spinal Fusion",
+    "Intervertebral Disc Displacement",
+    "Scoliosis",
+    "Spinal Stenosis",
+    "Low Back Pain",
+    "Lumbar Vertebrae",
+    "Cervical Vertebrae"
+  ],
+
+  "title_keywords": [
+    "spine",
+    "spinal",
+    "vertebral",
+    "lumbar",
+    "cervical",
+    "thoracic",
+    "scoliosis",
+    "disc",
+    "back pain",
+    "fusion"
+  ],
+
+  "email_subject_prefix": "Spine Surgery Weekly",
+  "subscribers_sheet": "subscribers",
+  "enable_feedback": false
+}

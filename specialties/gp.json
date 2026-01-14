@@ -1,0 +1,54 @@
+{
+  "name": "General Practice",
+  "slug": "gp",
+  "description": "General practice and family medicine",
+
+"specialty_journals": [
+  "Annals of Family Medicine",
+  "Journal of the American Board of Family Medicine",
+  "Family Medicine",
+  "Journal of Primary Care & Community Health",
+  "British Journal of General Practice",
+  "BJGP Open",
+  "European Journal of General Practice",
+  "Family Practice",
+  "Scandinavian Journal of Primary Health Care",
+  "Primary Health Care Research & Development",
+  "BMC Primary Care",
+  "Journal of Family Medicine and Primary Care",
+  "Journal of Primary Health Care",
+  "Journal of Rural Medicine",
+  "Journal of Family and Community Medicine",
+  "African Journal of Primary Health Care & Family Medicine",
+  "Canadian Journal of Rural Medicine"
+],
+
+"general_journals": [
+  "The BMJ",
+  "BMJ Open",
+  "New England Journal of Medicine",
+  "JAMA",
+  "The Lancet",
+  "BMC Medicine"
+],
+
+  "mesh_terms": [
+    "General Practice",
+    "Family Practice",
+    "Primary Health Care",
+    "Physicians, Family",
+    "Physicians, Primary Care"
+  ],
+
+  "title_keywords": [
+    "general practice",
+    "family medicine",
+    "primary care",
+    "family physician",
+    "general practitioner"
+  ],
+
+  "email_subject_prefix": "General Practice Weekly",
+  "subscribers_sheet": "subscribers",
+  "enable_feedback": false
+}

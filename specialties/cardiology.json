@@ -1,0 +1,54 @@
+{
+  "name": "Cardiology",
+  "slug": "cardiology",
+  "description": "Cardiovascular medicine and cardiac surgery",
+
+  "specialty_journals": [
+    "Circulation",
+    "Journal of the American College of Cardiology",
+    "European Heart Journal",
+    "JAMA Cardiology",
+    "Circulation: Heart Failure",
+    "Circulation: Arrhythmia and Electrophysiology",
+    "Heart",
+    "American Heart Journal",
+    "JACC: Heart Failure",
+    "JACC: Cardiovascular Imaging",
+    "Heart (British Cardiac Society)"
+  ],
+
+  "general_journals": [
+    "The New England journal of medicine",
+    "Lancet",
+    "Nature"
+  ],
+
+  "mesh_terms": [
+    "Cardiovascular Diseases",
+    "Heart Diseases",
+    "Cardiology",
+    "Myocardial Infarction",
+    "Heart Failure",
+    "Arrhythmias, Cardiac",
+    "Coronary Artery Disease",
+    "Atrial Fibrillation",
+    "Hypertension"
+  ],
+
+  "title_keywords": [
+    "cardiac",
+    "cardiovascular",
+    "heart",
+    "arrhythmia",
+    "myocardial",
+    "coronary",
+    "atrial fibrillation",
+    "heart failure",
+    "cardiomyopathy",
+    "valvular"
+  ],
+
+  "email_subject_prefix": "Cardiology Weekly",
+  "subscribers_sheet": "subscribers",
+  "enable_feedback": true
+}
