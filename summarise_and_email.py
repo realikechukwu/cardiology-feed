@@ -974,6 +974,11 @@ def main() -> int:
             continue
         personalized_html = build_personalized_content(email, firstname)
         if not args.no_send:
+            # Build specialty-specific sender name
+            specialty_name = specialty_config.get("name", "Cardiology")
+            default_sender = f"Ike Chukwudi | {specialty_name} Digest"
+            sender_name = os.getenv("EMAIL_FROM_NAME", default_sender)
+
             send_gmail_html(
                 smtp_user=smtp_user,
                 smtp_app_password=smtp_app_password,
@@ -981,7 +986,7 @@ def main() -> int:
                 from_addr=from_addr,
                 subject=subject,
                 html_body=personalized_html,
-                from_name=os.getenv("EMAIL_FROM_NAME", "Ike Chukwudi | Cardiology Digest"),
+                from_name=sender_name,
             )
         sent_count += 1
         if delay_s > 0 and not args.no_send:
