@@ -379,26 +379,26 @@ function sendWelcomeEmail(email, firstname, specialty) {
     cardiology: {
       title: 'Cardiology Weekly',
       displayName: 'cardiology',
-      senderName: 'Ike Chukwudi | Cardiology Digest',
+      senderName: 'Fname Sname | Cardiology Digest',
       enableFeedback: true
     },
     gp: {
       title: 'General Practice Weekly',
       displayName: 'general practice',
-      senderName: 'Ike Chukwudi | General Practice Digest',
+      senderName: 'Fname Sname  | General Practice Digest',
       enableFeedback: false
     },
     spine: {
       title: 'Spine Surgery Weekly',
       displayName: 'spine surgery',
-      senderName: 'Ike Chukwudi | Spine Surgery Digest',
+      senderName: 'Fname Sname  | Spine Surgery Digest',
       enableFeedback: false
     },
     // ADD YOUR NEW SPECIALTY HERE
     neurology: {
       title: 'Neurology Weekly',
       displayName: 'neurology',
-      senderName: 'Ike Chukwudi | Neurology Digest',
+      senderName: 'Fname Sname  | Neurology Digest',
       enableFeedback: false
     }
   };
@@ -449,7 +449,7 @@ Verify:
 - ✅ Articles fetched from correct journals
 - ✅ Subject line: "Neurology Weekly — {date}"
 - ✅ Email header: "Weekly Neurology Digest"
-- ✅ Sender name: "Ike Chukwudi | Neurology Digest"
+- ✅ Sender name: "Fname Sname | Neurology Digest"
 - ✅ No feedback features (if `enable_feedback: false`)
 
 ### Step 5: Update GitHub Actions (Optional)
@@ -520,7 +520,7 @@ After the first run, the system creates:
 
 ✅ **Email branding** - Uses `name` from config
 ✅ **Subject line** - Uses `email_subject_prefix` from config
-✅ **Sender name** - Auto-generates "Ike Chukwudi | {specialty} Digest"
+✅ **Sender name** - Auto-generates "Fname Sname  | {specialty} Digest"
 ✅ **Subscriber filtering** - Reads specialty column from Google Sheets
 ✅ **State file tracking** - Creates specialty-specific state files
 ✅ **Output files** - Creates specialty-specific output files
@@ -567,12 +567,4 @@ Feedback links and "Your Saves" section will automatically appear in emails.
 - Verify `normalizeSpecialty()` in Apps Script handles variations
 - Test with `--dry-run-email` first
 
-### Cost Considerations
 
-Each specialty adds:
-- **OpenAI costs**: ~$0.01 per digest (10 summaries × $0.001)
-- **PubMed API**: Free (stays within rate limits)
-- **Gmail SMTP**: Free
-- **Google Sheets**: Free
-
-Total cost per specialty per week: **~$0.01**
