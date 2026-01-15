@@ -197,12 +197,31 @@ def parse_abstract(article: ET.Element) -> str:
     return "\n".join(chunks).strip()
 
 
-def classify_article(pub_types: List[str], has_abstract: bool) -> str:
-    """Classify article based on publication type and content availability."""
+def classify_article(pub_types: List[str], has_abstract: bool, title: str = "") -> str:
+    """Classify article based on publication type, content availability, and title."""
     pub_types_set = set(pub_types)
 
     # Check for excluded types first
     if pub_types_set & EXCLUDE_PUB_TYPES:
+        return "excluded"
+
+    # Filter protocols with missing publication types
+    # If "protocol" is in title AND no publication types assigned, exclude it
+    # (Legitimate studies should have pub types; protocols without proper tagging are low-quality)
+    title_lower = title.lower()
+    if "protocol" in title_lower and not pub_types:
+        return "excluded"
+
+    # Also exclude if title explicitly indicates it's a protocol paper
+    protocol_phrases = [
+        "study protocol",
+        "trial protocol",
+        "protocol for",
+        ": protocol",
+        "protocol of",
+        "research protocol",
+    ]
+    if any(phrase in title_lower for phrase in protocol_phrases):
         return "excluded"
 
     # Check for priority research types
@@ -238,8 +257,8 @@ def parse_article(article: ET.Element) -> Dict[str, Any]:
         if pt_elem.text:
             pub_types.append(pt_elem.text.strip())
 
-    # Classify the article
-    category = classify_article(pub_types, bool(abstract))
+    # Classify the article (NOW PASSING TITLE)
+    category = classify_article(pub_types, bool(abstract), title)
 
     # Extract authors (first 3)
     authors = []
