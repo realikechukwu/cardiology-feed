@@ -526,7 +526,7 @@ def hero_card_html(a: Article, s: Dict[str, Any], feedback_html: str = "") -> st
         tags_html = f'<div style="margin-top:12px;">{tags_pills}</div>'
 
     return f"""
-    <div style="border:1px solid #e0e0e0; border-radius:8px; padding:24px; margin:16px 0; background:#ffffff;">
+    <div style="border:1px solid #e0e0e0; border-radius:8px; padding:24px; margin:16px 0; background:#ffffff; box-shadow:0 2px 4px rgba(0,0,0,0.06);">
       <div style="font-size:17px; font-weight:600; line-height:1.4; margin-bottom:6px;">
         <a href="{url}" style="color:#1a1a1a; text-decoration:none;">{title}</a>{rct_badge}
       </div>
