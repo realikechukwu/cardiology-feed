@@ -70,6 +70,9 @@ EXCLUDE_PUB_TYPES = {
     "Published Erratum",
     "Retraction of Publication",
     "Retracted Publication",
+    "Clinical Study Protocol",
+    "Clinical Trial Protocol",
+    "Study Protocol",
 }
 
 EUTILS_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"

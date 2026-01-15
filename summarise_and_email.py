@@ -394,10 +394,12 @@ SUMMARY_SCHEMA: Dict[str, Any] = {
         "additionalProperties": False,
         "properties": {
             "study_type": {"type": "string"},
+            "context": {"type": "string"},
             "finding": {"type": "string"},
             "so_what": {"type": "string"},
+            "tags": {"type": "array", "items": {"type": "string"}, "minItems": 0, "maxItems": 4},
         },
-        "required": ["study_type", "finding", "so_what"],
+        "required": ["study_type", "context", "finding", "so_what", "tags"],
     },
     "strict": True,
 }
@@ -427,16 +429,24 @@ def summarise_one(client: OpenAI, model: str, a: Article, specialty_name: str = 
     """
     system = (
         f"You are writing a brief editorial note for a {specialty_name.lower()} digest. "
-        "Return JSON with exactly three fields:\n"
+        "Return JSON with exactly five fields:\n"
         "- study_type: Classify the design using one of these exact formats: "
         "'RCT', 'Meta-analysis', 'Systematic review', 'Prospective cohort', "
         "'Retrospective cohort', 'Case-control', 'Case series', 'Narrative review', "
         "'Guideline', or 'Other'. Use sentence case (e.g., 'Meta-analysis' not 'META-ANALYSIS').\n"
-        "- finding: The primary result or conclusion. For trials and observational "
-        "studies, include effect size, CI, and p-value if reported. For reviews, "
-        "state the main synthesis or conclusion.\n"
+        "- context: One sentence on the clinical question or gap this addresses. "
+        "What problem were they examining? If not clear from abstract, write 'Not reported'.\n"
+        "- finding: The primary result, conclusion, or recommendation. "
+        "FOR TRIALS/OBSERVATIONAL STUDIES: Include effect size, CI, and p-value if reported. "
+        "FOR META-ANALYSES/SYSTEMATIC REVIEWS: State pooled estimate or main synthesis conclusion. "
+        "FOR NARRATIVE REVIEWS: State the main expert consensus or takeaway. "
+        "FOR GUIDELINES: State the key recommendation or change from prior guidance.\n"
         "- so_what: One sentence on why a clinician should care. What does this "
-        "change, confirm, or challenge in practice?\n\n"
+        "change, confirm, or challenge in practice? For reviews, focus on practice "
+        "implications or important gaps identified.\n"
+        "- tags: 2-4 clinical tags or keywords that categorize this study "
+        "(e.g., 'Heart Failure', 'Prevention', 'Diabetes', 'Anticoagulation', 'Imaging'). "
+        "Use title case.\n\n"
         "If a detail is not in the abstract, write 'Not reported'. "
         "Be precise. No hype words like 'breakthrough' or 'game-changing'. "
         "Use only information from the provided abstract."
@@ -495,12 +505,25 @@ def hero_card_html(a: Article, s: Dict[str, Any], feedback_html: str = "") -> st
     # Normalize study type to consistent formatting
     raw_study_type = s.get("study_type", "")
     study_type = html_escape(strip_control_chars(normalize_study_type(raw_study_type)))
+    context = html_escape(strip_control_chars(s.get("context", "")))
     finding = html_escape(strip_control_chars(s.get("finding", "")))
     so_what = html_escape(strip_control_chars(s.get("so_what", "")))
+    tags = s.get("tags", [])
 
     # Build meta line: journal · date · authors
     meta_parts = [p for p in [journal, pub_date, authors] if p]
     meta_line = " · ".join(meta_parts)
+
+    # Build tags HTML
+    tags_html = ""
+    if tags:
+        tags_pills = "".join(
+            f'<span style="display:inline-block; padding:3px 8px; margin:2px 6px 2px 0; '
+            f'border:1px solid #ddd; border-radius:12px; font-size:11px; color:#555;">'
+            f'{html_escape(tag)}</span>'
+            for tag in tags[:4]
+        )
+        tags_html = f'<div style="margin-top:12px;">{tags_pills}</div>'
 
     return f"""
     <div style="border:1px solid #e0e0e0; border-radius:8px; padding:24px; margin:16px 0; background:#ffffff;">
@@ -517,14 +540,21 @@ def hero_card_html(a: Article, s: Dict[str, Any], feedback_html: str = "") -> st
       </div>
 
       <div style="margin-bottom:16px;">
+        <div style="font-size:11px; color:#888; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:5px;">Context</div>
+        <div style="font-size:14px; line-height:1.5; color:#333;">{context}</div>
+      </div>
+
+      <div style="margin-bottom:16px;">
         <div style="font-size:11px; color:#888; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:5px;">Finding</div>
         <div style="font-size:14px; line-height:1.5; color:#333;">{finding}</div>
       </div>
 
-      <div style="background:#f9f9f9; padding:14px; border-radius:6px; border-left:3px solid #666;">
+      <div style="background:#f9f9f9; padding:14px; border-radius:6px; border-left:3px solid #666; margin-bottom:12px;">
         <div style="font-size:11px; color:#888; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:5px;">So What?</div>
         <div style="font-size:14px; line-height:1.5; color:#1a1a1a; font-weight:500;">{so_what}</div>
       </div>
+
+      {tags_html}
       {feedback_html}
     </div>
     """
